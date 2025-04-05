@@ -2,21 +2,46 @@
 #define CNT_LIFETIME_H
 
 #include <stdbool.h>
-#include <stddef.h>
+#include "cnt_variable.h" // Variable yapısı için
 
-// Yaşam Süresi Yapısı
-typedef struct Lifetime {
-    void* owner; // Sahiplik sahibi
-    size_t scope_id; // Kapsam kimliği
-} Lifetime;
+// Ömür Kategorileri
+typedef enum {
+    LIFETIME_STATIC,   // Programın başlangıcından sonuna kadar yaşar
+    LIFETIME_AUTOMATIC, // Tanımlandığı blok boyunca yaşar
+    LIFETIME_TEMPORARY // Bir ifade veya işlem süresince yaşar
+    // ... diğer ömür kategorileri gerekirse eklenebilir
+} LifetimeCategory;
 
-// Yaşam Süresi Oluşturma Fonksiyonu
-Lifetime lifetime_create(void* owner, size_t scope_id);
+// Ömür Bilgisi Yapısı
+typedef struct LifetimeInfo {
+    LifetimeCategory category;
+    // Otomatik ömür için, tanımlandığı kapsamı tutabiliriz (isteğe bağlı)
+    // SymbolTable* scope;
+    // ... ömür ile ilgili ek bilgiler gerekirse eklenebilir
+} LifetimeInfo;
 
-// Yaşam Süresi Kontrol Fonksiyonu
-bool lifetime_check(Lifetime* lifetime, size_t current_scope_id);
+ typedef struct Variable {
+     char* name;
+     Type* type;
+     void* value;
+     bool is_mutable;
+     VariableOwnership* ownership;
+     LifetimeInfo* lifetime; // Yeni eklenen alan
+ };
 
-// Yaşam Süresi Serbest Bırakma Fonksiyonu
-void lifetime_drop(Lifetime* lifetime);
+// Ömür Yönetimi Fonksiyon Prototipleri
+
+// Bir değişken için ömür bilgisi oluşturma
+LifetimeInfo* lifetime_create(LifetimeCategory category);
+
+// Bir değişkene ömür bilgisi atama
+void lifetime_assign(Variable* var, LifetimeCategory category);
+
+// İki değişkenin ömürlerinin uyumlu olup olmadığını kontrol etme
+// (Örneğin, ödünç alanın ömrü, ödünç verenin ömründen kısa veya eşit olmalı)
+bool lifetimes_are_compatible(const Variable* borrower, const Variable* owner);
+
+// Bir değişkenin kapsamının sonuna ulaşıp ulaşmadığını kontrol etme (basit bir yaklaşım)
+bool is_lifetime_ended(const Variable* var);
 
 #endif
