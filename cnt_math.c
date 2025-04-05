@@ -1,67 +1,48 @@
-#include "cnt_math.h"
 #include <math.h>
+#include <stdlib.h>
+#include "cnt_math.h"
 
-// Mutlak Değer Fonksiyonu (Tamsayı)
-int32_t Math_Abs(int32_t num) {
-    return (num < 0) ? -num : num;
+// Mutlak Değer Fonksiyonları
+int abs_int(int value) {
+    return (value < 0) ? -value : value;
 }
 
-// Mutlak Değer Fonksiyonu (Kayan Nokta)
-float Math_FAbs(float num) {
-    return fabsf(num);
+double abs_double(double value) {
+    return fabs(value);
 }
 
-// Üs Alma Fonksiyonu
-float Math_Pow(float base, float exponent) {
-    return powf(base, exponent);
+// Üs Alma Fonksiyonları
+double pow_int(int base, int exponent) {
+    double result = 1.0;
+    for (int i = 0; i < exponent; i++) {
+        result *= base;
+    }
+    return result;
 }
 
-// Karekök Alma Fonksiyonu
-float Math_Sqrt(float num) {
-    return sqrtf(num);
+double pow_double(double base, double exponent) {
+    return pow(base, exponent);
 }
 
-// Sinüs Fonksiyonu
-float Math_Sin(float angle) {
-    return sinf(angle);
+// Karekök Fonksiyonu
+double sqrt_double(double value) {
+    return sqrt(value);
 }
 
-// Kosinüs Fonksiyonu
-float Math_Cos(float angle) {
-    return cosf(angle);
+// Trigonometrik Fonksiyonlar
+double sin_double(double angle) {
+    return sin(angle);
 }
 
-// Tanjant Fonksiyonu
-float Math_Tan(float angle) {
-    return tanf(angle);
+double cos_double(double angle) {
+    return cos(angle);
 }
 
-// Arksinüs Fonksiyonu
-float Math_ASin(float value) {
-    return asinf(value);
+double tan_double(double angle) {
+    return tan(angle);
 }
 
-// Arkkosinüs Fonksiyonu
-float Math_ACos(float value) {
-    return acosf(value);
-}
-
-// Arktanjant Fonksiyonu
-float Math_ATan(float value) {
-    return atanf(value);
-}
-
-// Yuvarlama Fonksiyonu
-int32_t Math_Round(float num) {
-    return (int32_t)roundf(num);
-}
-
-// Yukarı Yuvarlama Fonksiyonu
-int32_t Math_Ceil(float num) {
-    return (int32_t)ceilf(num);
-}
-
-// Aşağı Yuvarlama Fonksiyonu
-int32_t Math_Floor(float num) {
-    return (int32_t)floorf(num);
+// Rastgele Sayı Üretme Fonksiyonu
+int rand_int(int min, int max) {
+    return rand() % (max - min + 1) + min;
 }

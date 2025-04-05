@@ -1,17 +1,15 @@
 #ifndef CNT_SORT_H
 #define CNT_SORT_H
 
-#include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 
-// Kabarcık Sıralama Fonksiyonu
-void BubbleSort(void* arr, uint32_t size, size_t elementSize, int (*compare)(const void*, const void*));
+// Sıralama Fonksiyonu İşaretçisi
+typedef int (*CompareFunction)(void*, void*);
 
-// Ekleme Sıralama Fonksiyonu
-void InsertionSort(void* arr, uint32_t size, size_t elementSize, int (*compare)(const void*, const void*));
+// Hızlı Sıralama Fonksiyonu
+void quick_sort(void** array, size_t size, CompareFunction compare);
 
-// Seçmeli Sıralama Fonksiyonu
-void SelectionSort(void* arr, uint32_t size, size_t elementSize, int (*compare)(const void*, const void*));
+// Birleştirme Sıralaması Fonksiyonu
+void merge_sort(void** array, size_t size, CompareFunction compare);
 
 #endif

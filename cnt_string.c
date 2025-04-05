@@ -1,168 +1,107 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdbool.h>
 #include "cnt_string.h"
 
-// Dize Uzunluğunu Bulma Fonksiyonu
-uint32_t String_Length(const char* str) {
-    if (str == NULL) {
-        return 0;
-    }
-
-    uint32_t length = 0;
-    while (str[length] != '\0') {
-        length++;
-    }
-
-    return length;
+size_t cnt_string_length(const char* str) {
+    return strlen(str);
 }
 
-// Dize Kopyalama Fonksiyonu
-char* String_Copy(char* dest, const char* src) {
-    if (dest == NULL || src == NULL) {
-        return NULL;
-    }
-
-    uint32_t i = 0;
-    while (src[i] != '\0') {
-        dest[i] = src[i];
-        i++;
-    }
-    dest[i] = '\0';
-
-    return dest;
+char* cnt_string_copy(const char* str) {
+    char* copy = (char*)malloc(strlen(str) + 1);
+    strcpy(copy, str);
+    return copy;
 }
 
-// Dize Birleştirme Fonksiyonu
-char* String_Concatenate(char* dest, const char* src) {
-    if (dest == NULL || src == NULL) {
-        return NULL;
-    }
-
-    uint32_t destLength = String_Length(dest);
-    uint32_t i = 0;
-    while (src[i] != '\0') {
-        dest[destLength + i] = src[i];
-        i++;
-    }
-    dest[destLength + i] = '\0';
-
-    return dest;
+char* cnt_string_concat(const char* str1, const char* str2) {
+    char* result = (char*)malloc(strlen(str1) + strlen(str2) + 1);
+    strcpy(result, str1);
+    strcat(result, str2);
+    return result;
 }
 
-// Dize Karşılaştırma Fonksiyonu
-int String_Compare(const char* str1, const char* str2) {
-    if (str1 == NULL || str2 == NULL) {
-        return 0;
+int cnt_string_compare(const char* str1, const char* str2) {
+    return strcmp(str1, str2);
+}
+
+char* cnt_string_find(const char* str, const char* substr) {
+    return strstr(str, substr);
+}
+
+char** cnt_string_split(const char* str, const char* delimiter, size_t* result_count) {
+    char* copy = cnt_string_copy(str);
+    char* token = strtok(copy, delimiter);
+    char** result = NULL;
+    *result_count = 0;
+
+    while (token != NULL) {
+        result = (char**)realloc(result, (*result_count + 1) * sizeof(char*));
+        result[*result_count] = cnt_string_copy(token);
+        (*result_count)++;
+        token = strtok(NULL, delimiter);
     }
 
-    uint32_t i = 0;
-    while (str1[i] != '\0' && str2[i] != '\0') {
-        if (str1[i] < str2[i]) {
-            return -1;
-        } else if (str1[i] > str2[i]) {
-            return 1;
-        }
-        i++;
-    }
+    free(copy);
+    return result;
+}
 
-    if (str1[i] == '\0' && str2[i] == '\0') {
-        return 0;
-    } else if (str1[i] == '\0') {
-        return -1;
+int cnt_string_to_int(const char* str) {
+    return atoi(str);
+}
+
+double cnt_string_to_double(const char* str) {
+    return atof(str);
+}
+
+bool cnt_string_to_bool(const char* str) {
+    if (strcasecmp(str, "true") == 0 || strcmp(str, "1") == 0) {
+        return true;
+    } else if (strcasecmp(str, "false") == 0 || strcmp(str, "0") == 0) {
+        return false;
     } else {
-        return 1;
+        return false; // Varsayılan olarak false döndür
     }
 }
 
-// Dize Alt Dize Arama Fonksiyonu
-char* String_Find(const char* str, const char* subStr) {
-    if (str == NULL || subStr == NULL) {
-        return NULL;
+char* cnt_string_to_lower(const char* str) {
+    char* result = cnt_string_copy(str);
+    for (char* p = result; *p; p++) {
+        *p = tolower(*p);
     }
-
-    uint32_t strLength = String_Length(str);
-    uint32_t subStrLength = String_Length(subStr);
-
-    if (subStrLength > strLength) {
-        return NULL;
-    }
-
-    for (uint32_t i = 0; i <= strLength - subStrLength; i++) {
-        uint32_t j;
-        for (j = 0; j < subStrLength; j++) {
-            if (str[i + j] != subStr[j]) {
-                break;
-            }
-        }
-        if (j == subStrLength) {
-            return (char*)str + i;
-        }
-    }
-
-    return NULL;
+    return result;
 }
 
-// Dizeyi Tamsayıya Dönüştürme Fonksiyonu
-int32_t String_ToInteger(const char* str) {
-    if (str == NULL) {
-        return 0;
+char* cnt_string_to_upper(const char* str) {
+    char* result = cnt_string_copy(str);
+    for (char* p = result; *p; p++) {
+        *p = toupper(*p);
     }
-
-    int32_t result = 0;
-    int32_t sign = 1;
-    uint32_t i = 0;
-
-    if (str[0] == '-') {
-        sign = -1;
-        i = 1;
-    }
-
-    while (str[i] != '\0') {
-        if (str[i] >= '0' && str[i] <= '9') {
-            result = result * 10 + (str[i] - '0');
-            i++;
-        } else {
-            break;
-        }
-    }
-
-    return result * sign;
+    return result;
 }
 
-// Tamsayıyı Dizeye Dönüştürme Fonksiyonu
-char* Integer_ToString(int32_t num, char* str, uint32_t size) {
-    if (str == NULL || size == 0) {
-        return NULL;
+char* cnt_string_reverse(const char* str) {
+    size_t length = strlen(str);
+    char* result = (char*)malloc(length + 1);
+    for (size_t i = 0; i < length; i++) {
+        result[i] = str[length - 1 - i];
     }
+    result[length] = '\0';
+    return result;
+}
 
-    if (num == 0) {
-        str[0] = '0';
-        str[1] = '\0';
-        return str;
+char* cnt_string_trim(const char* str) {
+    const char* start = str;
+    while (isspace(*start)) start++;
+    if (*start == '\0') {
+        return cnt_string_copy(""); // Tüm karakterler boşluksa boş string döndür
     }
-
-    int32_t sign = 1;
-    if (num < 0) {
-        sign = -1;
-        num = -num;
-    }
-
-    uint32_t i = 0;
-    while (num != 0) {
-        str[i++] = (num % 10) + '0';
-        num /= 10;
-    }
-
-    if (sign == -1) {
-        str[i++] = '-';
-    }
-
-    str[i] = '\0';
-
-    // Diziyi ters çevir
-    for (uint32_t j = 0; j < i / 2; j++) {
-        char temp = str[j];
-        str[j] = str[i - j - 1];
-        str[i - j - 1] = temp;
-    }
-
-    return str;
+    const char* end = str + strlen(str) - 1;
+    while (end > start && isspace(*end)) end--;
+    size_t length = end - start + 1;
+    char* result = (char*)malloc(length + 1);
+    strncpy(result, start, length);
+    result[length] = '\0';
+    return result;
 }
