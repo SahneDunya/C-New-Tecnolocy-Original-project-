@@ -1,26 +1,32 @@
 #ifndef CNT_ERROR_H
 #define CNT_ERROR_H
 
-#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-// Hata Türleri (isteğe bağlı)
+// CNT Hata Kodları
 typedef enum {
-    ERROR_LEXICAL,
-    ERROR_SYNTAX,
-    ERROR_SEMANTIC,
-    ERROR_INTERNAL
-    // ... diğer hata türleri ...
-} ErrorType;
+    CNT_ERROR_NONE = 0,
+    CNT_ERROR_FILE_OPEN_FAILED,
+    CNT_ERROR_FILE_READ_FAILED,
+    CNT_ERROR_FILE_WRITE_FAILED,
+    CNT_ERROR_MEMORY_ALLOCATION_FAILED,
+    CNT_ERROR_INVALID_FILE_FORMAT,
+    CNT_ERROR_KEY_NOT_FOUND,
+    CNT_ERROR_INVALID_ARGUMENT,
+    // ... diğer hata kodları ...
+} CNTErrorCode;
 
-// Hata Bilgisi Yapısı
-typedef struct ErrorInfo {
-    ErrorType type;
-    size_t line;
-    size_t column;
-    char* message;
-} ErrorInfo;
+// CNT Hata Mesajları
+const char* CNT_GetErrorMessage(CNTErrorCode errorCode);
 
-// Hata Raporlama Fonksiyonu (genel amaçlı)
-void report_error(ErrorType type, size_t line, size_t column, const char* message);
+// CNT Hata Durumunu Kontrol Etme Fonksiyonu
+bool CNT_IsError(CNTErrorCode errorCode);
+
+// CNT Hata Kodunu Alma Fonksiyonu
+CNTErrorCode CNT_GetErrorCode(void);
+
+// CNT Hata Kodunu Ayarlama Fonksiyonu
+void CNT_SetErrorCode(CNTErrorCode errorCode);
 
 #endif
