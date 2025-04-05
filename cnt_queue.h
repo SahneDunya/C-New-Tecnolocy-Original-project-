@@ -3,18 +3,42 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include "cnt_osal.h"
 
-// Kuyruk Tanımlayıcısı
-typedef OSAL_QueueHandle QueueHandle;
+// Kuyruk Öğesi Yapısı
+typedef struct QueueNode {
+    void* data;
+    struct QueueNode* next;
+} QueueNode;
+
+// Kuyruk Yapısı
+typedef struct {
+    QueueNode* front;
+    QueueNode* rear;
+    size_t size;
+} Queue;
 
 // Kuyruk Oluşturma Fonksiyonu
-QueueHandle Queue_Create(uint32_t messageSize, uint32_t queueLength);
+Queue* create_queue();
 
-// Kuyruğa Mesaj Gönderme Fonksiyonu
-bool Queue_Send(QueueHandle queue, void* message, uint32_t timeout);
+// Kuyruk Öğesi Ekleme Fonksiyonu
+void queue_enqueue(Queue* queue, void* data);
 
-// Kuyruktan Mesaj Alma Fonksiyonu
-bool Queue_Receive(QueueHandle queue, void* message, uint32_t timeout);
+// Kuyruk Öğesi Kaldırma Fonksiyonu
+void* queue_dequeue(Queue* queue);
+
+// Kuyruk Öğesine Erişim Fonksiyonu
+void* queue_peek(Queue* queue);
+
+// Kuyruk Boyutu Fonksiyonu
+size_t queue_size(Queue* queue);
+
+// Kuyruk Boş Mu Fonksiyonu
+bool queue_is_empty(Queue* queue);
+
+// Kuyruk Temizleme Fonksiyonu
+void queue_clear(Queue* queue);
+
+// Kuyruk Serbest Bırakma Fonksiyonu
+void free_queue(Queue* queue);
 
 #endif

@@ -3,16 +3,31 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
-#include "cnt_osal.h"
 
-// İş Parçacığı Tanımlayıcısı
-typedef OSAL_ThreadHandle ThreadHandle;
+// İş Parçacığı Yapısı
+typedef struct {
+    // Platforma özgü iş parçacığı tanıtıcısı
+    #ifdef _WIN32
+        HANDLE thread_handle;
+        DWORD thread_id;
+    #else
+        pthread_t thread_id;
+    #endif
+} Thread;
+
+// İş Parçacığı Fonksiyonu İşaretçisi
+typedef void* (*ThreadFunction)(void* arg);
 
 // İş Parçacığı Oluşturma Fonksiyonu
-ThreadHandle Thread_Create(void (*entry)(void*), void* argument, uint32_t stackSize, uint32_t priority);
+Thread* create_thread(ThreadFunction function, void* arg);
 
-// İş Parçacığı Geciktirme Fonksiyonu
-void Thread_Delay(uint32_t milliseconds);
+// İş Parçacığı Bekleme Fonksiyonu
+int wait_for_thread(Thread* thread);
+
+// İş Parçacığı Sonlandırma Fonksiyonu
+bool terminate_thread(Thread* thread);
+
+// İş Parçacığı Serbest Bırakma Fonksiyonu
+void free_thread(Thread* thread);
 
 #endif

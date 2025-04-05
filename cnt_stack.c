@@ -1,82 +1,61 @@
-#include "cnt_stack.h"
+#include <stdio.h>
 #include <stdlib.h>
+#include "cnt_stack.h"
 
-// Yığın Başlatma Fonksiyonu
-bool Stack_Init(Stack* stack, uint32_t capacity) {
-    if (stack == NULL || capacity == 0) {
-        return false;
-    }
-
-    stack->items = (void**)malloc(capacity * sizeof(void*));
-    if (stack->items == NULL) {
-        return false;
-    }
-
-    stack->capacity = capacity;
-    stack->top = 0;
-
-    return true;
+Stack* create_stack() {
+    Stack* stack = (Stack*)malloc(sizeof(Stack));
+    stack->top = NULL;
+    stack->size = 0;
+    return stack;
 }
 
-// Yığına Öğe Ekleme Fonksiyonu
-bool Stack_Push(Stack* stack, void* item) {
-    if (stack == NULL || stack->top >= stack->capacity) {
-        return false;
-    }
-
-    stack->items[stack->top++] = item;
-    return true;
+void stack_push(Stack* stack, void* data) {
+    StackNode* new_node = (StackNode*)malloc(sizeof(StackNode));
+    new_node->data = data;
+    new_node->next = stack->top;
+    stack->top = new_node;
+    stack->size++;
 }
 
-// Yığından Öğe Çıkarma Fonksiyonu
-void* Stack_Pop(Stack* stack) {
-    if (stack == NULL || stack->top == 0) {
+void* stack_pop(Stack* stack) {
+    if (stack->top == NULL) {
         return NULL;
     }
 
-    return stack->items[--stack->top];
+    StackNode* removed_node = stack->top;
+    void* removed_data = removed_node->data;
+    stack->top = removed_node->next;
+    free(removed_node);
+    stack->size--;
+    return removed_data;
 }
 
-// Yığının En Üstündeki Öğeyi Alma Fonksiyonu
-void* Stack_Peek(Stack* stack) {
-    if (stack == NULL || stack->top == 0) {
+void* stack_peek(Stack* stack) {
+    if (stack->top == NULL) {
         return NULL;
     }
 
-    return stack->items[stack->top - 1];
+    return stack->top->data;
 }
 
-// Yığının Boş Olup Olmadığını Kontrol Etme Fonksiyonu
-bool Stack_IsEmpty(Stack* stack) {
-    if (stack == NULL) {
-        return true;
-    }
-
-    return stack->top == 0;
+size_t stack_size(Stack* stack) {
+    return stack->size;
 }
 
-// Yığının Dolu Olup Olmadığını Kontrol Etme Fonksiyonu
-bool Stack_IsFull(Stack* stack) {
-    if (stack == NULL) {
-        return false;
-    }
-
-    return stack->top == stack->capacity;
+bool stack_is_empty(Stack* stack) {
+    return stack->size == 0;
 }
 
-// Yığını Temizleme Fonksiyonu
-void Stack_Clear(Stack* stack) {
-    if (stack != NULL) {
-        stack->top = 0;
+void stack_clear(Stack* stack) {
+    while (stack->top != NULL) {
+        StackNode* temp = stack->top;
+        stack->top = stack->top->next;
+        free(temp);
     }
+    stack->size = 0;
 }
 
-// Yığını Yok Etme Fonksiyonu
-void Stack_Destroy(Stack* stack) {
-    if (stack != NULL) {
-        free(stack->items);
-        stack->items = NULL;
-        stack->capacity = 0;
-        stack->top = 0;
-    }
+void free_stack(Stack* stack) {
+    stack_clear(stack);
+    free(stack);
 }

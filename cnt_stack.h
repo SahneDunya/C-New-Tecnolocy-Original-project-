@@ -3,37 +3,41 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
+
+// Yığın Öğesi Yapısı
+typedef struct StackNode {
+    void* data;
+    struct StackNode* next;
+} StackNode;
 
 // Yığın Yapısı
 typedef struct {
-    void** items;
-    uint32_t capacity;
-    uint32_t top;
+    StackNode* top;
+    size_t size;
 } Stack;
 
-// Yığın Başlatma Fonksiyonu
-bool Stack_Init(Stack* stack, uint32_t capacity);
+// Yığın Oluşturma Fonksiyonu
+Stack* create_stack();
 
-// Yığına Öğe Ekleme Fonksiyonu
-bool Stack_Push(Stack* stack, void* item);
+// Yığın Öğesi Ekleme Fonksiyonu
+void stack_push(Stack* stack, void* data);
 
-// Yığından Öğe Çıkarma Fonksiyonu
-void* Stack_Pop(Stack* stack);
+// Yığın Öğesi Kaldırma Fonksiyonu
+void* stack_pop(Stack* stack);
 
-// Yığının En Üstündeki Öğeyi Alma Fonksiyonu
-void* Stack_Peek(Stack* stack);
+// Yığın Öğesine Erişim Fonksiyonu
+void* stack_peek(Stack* stack);
 
-// Yığının Boş Olup Olmadığını Kontrol Etme Fonksiyonu
-bool Stack_IsEmpty(Stack* stack);
+// Yığın Boyutu Fonksiyonu
+size_t stack_size(Stack* stack);
 
-// Yığının Dolu Olup Olmadığını Kontrol Etme Fonksiyonu
-bool Stack_IsFull(Stack* stack);
+// Yığın Boş Mu Fonksiyonu
+bool stack_is_empty(Stack* stack);
 
-// Yığını Temizleme Fonksiyonu
-void Stack_Clear(Stack* stack);
+// Yığın Temizleme Fonksiyonu
+void stack_clear(Stack* stack);
 
-// Yığını Yok Etme Fonksiyonu
-void Stack_Destroy(Stack* stack);
+// Yığın Serbest Bırakma Fonksiyonu
+void free_stack(Stack* stack);
 
 #endif

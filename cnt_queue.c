@@ -1,19 +1,77 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include "cnt_queue.h"
 
-// Kuyruk Oluşturma Fonksiyonu
-QueueHandle Queue_Create(uint32_t messageSize, uint32_t queueLength) {
-    // OSAL kuyruk oluşturma fonksiyonunu çağır
-    return OSAL_QueueCreate(messageSize, queueLength);
+Queue* create_queue() {
+    Queue* queue = (Queue*)malloc(sizeof(Queue));
+    queue->front = NULL;
+    queue->rear = NULL;
+    queue->size = 0;
+    return queue;
 }
 
-// Kuyruğa Mesaj Gönderme Fonksiyonu
-bool Queue_Send(QueueHandle queue, void* message, uint32_t timeout) {
-    // OSAL kuyruğa mesaj gönderme fonksiyonunu çağır
-    return OSAL_QueueSend(queue, message, timeout);
+void queue_enqueue(Queue* queue, void* data) {
+    QueueNode* new_node = (QueueNode*)malloc(sizeof(QueueNode));
+    new_node->data = data;
+    new_node->next = NULL;
+
+    if (queue->rear == NULL) {
+        queue->front = new_node;
+        queue->rear = new_node;
+    } else {
+        queue->rear->next = new_node;
+        queue->rear = new_node;
+    }
+
+    queue->size++;
 }
 
-// Kuyruktan Mesaj Alma Fonksiyonu
-bool Queue_Receive(QueueHandle queue, void* message, uint32_t timeout) {
-    // OSAL kuyruktan mesaj alma fonksiyonunu çağır
-    return OSAL_QueueReceive(queue, message, timeout);
+void* queue_dequeue(Queue* queue) {
+    if (queue->front == NULL) {
+        return NULL;
+    }
+
+    QueueNode* removed_node = queue->front;
+    void* removed_data = removed_node->data;
+    queue->front = removed_node->next;
+
+    if (queue->front == NULL) {
+        queue->rear = NULL;
+    }
+
+    free(removed_node);
+    queue->size--;
+    return removed_data;
+}
+
+void* queue_peek(Queue* queue) {
+    if (queue->front == NULL) {
+        return NULL;
+    }
+
+    return queue->front->data;
+}
+
+size_t queue_size(Queue* queue) {
+    return queue->size;
+}
+
+bool queue_is_empty(Queue* queue) {
+    return queue->size == 0;
+}
+
+void queue_clear(Queue* queue) {
+    while (queue->front != NULL) {
+        QueueNode* temp = queue->front;
+        queue->front = queue->front->next;
+        free(temp);
+    }
+
+    queue->rear = NULL;
+    queue->size = 0;
+}
+
+void free_queue(Queue* queue) {
+    queue_clear(queue);
+    free(queue);
 }

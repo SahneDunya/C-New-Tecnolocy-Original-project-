@@ -1,202 +1,183 @@
-#include "cnt_list.h"
+#include <stdio.h>
 #include <stdlib.h>
+#include "cnt_list.h"
 
-// Liste Başlatma Fonksiyonu
-void List_Init(List* list) {
-    if (list != NULL) {
-        list->head = NULL;
-        list->tail = NULL;
-        list->size = 0;
-    }
+List* create_list() {
+    List* list = (List*)malloc(sizeof(List));
+    list->head = NULL;
+    list->tail = NULL;
+    list->size = 0;
+    return list;
 }
 
-// Liste Başına Düğüm Ekleme Fonksiyonu
-bool List_PushFront(List* list, void* data) {
-    if (list == NULL) {
-        return false;
-    }
-
-    ListNode* newNode = (ListNode*)malloc(sizeof(ListNode));
-    if (newNode == NULL) {
-        return false;
-    }
-
-    newNode->data = data;
-    newNode->next = list->head;
-    list->head = newNode;
+void list_append(List* list, void* data) {
+    ListNode* new_node = (ListNode*)malloc(sizeof(ListNode));
+    new_node->data = data;
+    new_node->next = NULL;
 
     if (list->tail == NULL) {
-        list->tail = newNode;
-    }
-
-    list->size++;
-    return true;
-}
-
-// Liste Sonuna Düğüm Ekleme Fonksiyonu
-bool List_PushBack(List* list, void* data) {
-    if (list == NULL) {
-        return false;
-    }
-
-    ListNode* newNode = (ListNode*)malloc(sizeof(ListNode));
-    if (newNode == NULL) {
-        return false;
-    }
-
-    newNode->data = data;
-    newNode->next = NULL;
-
-    if (list->tail == NULL) {
-        list->head = newNode;
-        list->tail = newNode;
+        list->head = new_node;
+        list->tail = new_node;
     } else {
-        list->tail->next = newNode;
-        list->tail = newNode;
+        list->tail->next = new_node;
+        list->tail = new_node;
     }
 
     list->size++;
-    return true;
 }
 
-// Liste Başına Düğüm Çıkarma Fonksiyonu
-void* List_PopFront(List* list) {
-    if (list == NULL || list->head == NULL) {
+void list_prepend(List* list, void* data) {
+    ListNode* new_node = (ListNode*)malloc(sizeof(ListNode));
+    new_node->data = data;
+    new_node->next = list->head;
+
+    list->head = new_node;
+    if (list->tail == NULL) {
+        list->tail = new_node;
+    }
+
+    list->size++;
+}
+
+void list_insert(List* list, void* data, int index) {
+    if (index < 0 || index > list->size) {
+        fprintf(stderr, "Hata: Geçersiz indeks.\n");
+        return;
+    }
+
+    if (index == 0) {
+        list_prepend(list, data);
+        return;
+    }
+
+    if (index == list->size) {
+        list_append(list, data);
+        return;
+    }
+
+    ListNode* new_node = (ListNode*)malloc(sizeof(ListNode));
+    new_node->data = data;
+
+    ListNode* current = list->head;
+    for (int i = 0; i < index - 1; i++) {
+        current = current->next;
+    }
+
+    new_node->next = current->next;
+    current->next = new_node;
+
+    list->size++;
+}
+
+void* list_remove(List* list, int index) {
+    if (index < 0 || index >= list->size) {
+        fprintf(stderr, "Hata: Geçersiz indeks.\n");
         return NULL;
     }
 
-    ListNode* temp = list->head;
-    void* data = temp->data;
+    if (index == 0) {
+        return list_remove_first(list);
+    }
 
-    list->head = list->head->next;
-    free(temp);
+    if (index == list->size - 1) {
+        return list_remove_last(list);
+    }
+
+    ListNode* current = list->head;
+    for (int i = 0; i < index - 1; i++) {
+        current = current->next;
+    }
+
+    ListNode* removed_node = current->next;
+    current->next = removed_node->next;
+
+    void* removed_data = removed_node->data;
+    free(removed_node);
+
+    list->size--;
+    return removed_data;
+}
+
+void list_remove_first(List* list) {
+    if (list->head == NULL) {
+        return NULL;
+    }
+
+    ListNode* removed_node = list->head;
+    list->head = removed_node->next;
 
     if (list->head == NULL) {
         list->tail = NULL;
     }
 
+    void* removed_data = removed_node->data;
+    free(removed_node);
+
     list->size--;
-    return data;
+    return removed_data;
 }
 
-// Liste Sonundan Düğüm Çıkarma Fonksiyonu
-void* List_PopBack(List* list) {
-    if (list == NULL || list->tail == NULL) {
+void list_remove_last(List* list) {
+    if (list->tail == NULL) {
         return NULL;
     }
-
-    ListNode* temp = list->tail;
-    void* data = temp->data;
 
     if (list->head == list->tail) {
-        list->head = NULL;
-        list->tail = NULL;
-    } else {
-        ListNode* current = list->head;
-        while (current->next != list->tail) {
-            current = current->next;
-        }
-        current->next = NULL;
-        list->tail = current;
+        return list_remove_first(list);
     }
-
-    free(temp);
-    list->size--;
-    return data;
-}
-
-// Liste Düğümü Ekleme Fonksiyonu (Belirli Konuma)
-bool List_Insert(List* list, void* data, uint32_t index) {
-    if (list == NULL || index > list->size) {
-        return false;
-    }
-
-    if (index == 0) {
-        return List_PushFront(list, data);
-    }
-
-    if (index == list->size) {
-        return List_PushBack(list, data);
-    }
-
-    ListNode* newNode = (ListNode*)malloc(sizeof(ListNode));
-    if (newNode == NULL) {
-        return false;
-    }
-
-    newNode->data = data;
 
     ListNode* current = list->head;
-    for (uint32_t i = 0; i < index - 1; i++) {
+    while (current->next != list->tail) {
         current = current->next;
     }
 
-    newNode->next = current->next;
-    current->next = newNode;
+    ListNode* removed_node = list->tail;
+    current->next = NULL;
+    list->tail = current;
 
-    list->size++;
-    return true;
+    void* removed_data = removed_node->data;
+    free(removed_node);
+
+    list->size--;
+    return removed_data;
 }
 
-// Liste Düğümü Çıkarma Fonksiyonu (Belirli Konumdan)
-void* List_Remove(List* list, uint32_t index) {
-    if (list == NULL || index >= list->size) {
+void* list_get(List* list, int index) {
+    if (index < 0 || index >= list->size) {
+        fprintf(stderr, "Hata: Geçersiz indeks.\n");
         return NULL;
     }
 
-    if (index == 0) {
-        return List_PopFront(list);
-    }
-
-    if (index == list->size - 1) {
-        return List_PopBack(list);
-    }
-
     ListNode* current = list->head;
-    for (uint32_t i = 0; i < index - 1; i++) {
+    for (int i = 0; i < index; i++) {
         current = current->next;
     }
 
-    ListNode* temp = current->next;
-    void* data = temp->data;
-
-    current->next = temp->next;
-    free(temp);
-
-    list->size--;
-    return data;
+    return current->data;
 }
 
-// Liste Boyutunu Alma Fonksiyonu
-uint32_t List_Size(List* list) {
-    if (list == NULL) {
-        return 0;
-    }
+int list_size(List* list) {
     return list->size;
 }
 
-// Liste Boş Mu Kontrol Fonksiyonu
-bool List_IsEmpty(List* list) {
-    if (list == NULL) {
-        return true;
-    }
+bool list_is_empty(List* list) {
     return list->size == 0;
 }
 
-// Liste Temizleme Fonksiyonu
-void List_Clear(List* list) {
-    if (list == NULL) {
-        return;
-    }
-
+void list_clear(List* list) {
     ListNode* current = list->head;
     while (current != NULL) {
-        ListNode* temp = current;
-        current = current->next;
-        free(temp);
+        ListNode* next = current->next;
+        free(current);
+        current = next;
     }
 
     list->head = NULL;
     list->tail = NULL;
     list->size = 0;
+}
+
+void free_list(List* list) {
+    list_clear(list);
+    free(list);
 }
