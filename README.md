@@ -8,6 +8,15 @@ C New Technology is a programming language developed by Sahne Dünya based on th
 4. Standard Package Manager, as you know there is no standard package manager for C/C++ language, instead an external package manager is needed, But CNT language has a Standard Package Manager, thanks to this you do not need to install it externally!
 5. Unsafe blocks, as you know there is no such concept as Unsafe blocks in C/C++ language because these languages ​​are unsafe by default, but there are these blocks in CNT language because CNT language offers stricter security than other C languages ​​and there is a command specific to this language called ''unsafe'' this command is useful for that!
 
+# Basic features
+* File extension: .cnt (For C New Tecnolocy)
+* Memory Management: Ownership and borrowing
+* Compilation type: Ahead-of-Time
+* The executable file developed for it: .cnew
+* Underlying programming language: Classic C Programing Languge
+* Modern language features: yes
+* Standard Libray: yes
+
 # Target Hello World code
 ```
 print("Hello, World!");
