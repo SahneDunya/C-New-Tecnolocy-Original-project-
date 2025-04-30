@@ -7,3 +7,7 @@ C New Technology is a programming language developed by Sahne Dünya based on th
 3. Automatic Library usage, in C/C++ language you need to manually #include commands to use the library, but in CNT language it uses the library automatically without #include commands, by default it uses Standard CNT Library, if you do not want to use it you need to use #not include <standard c libray> command, now it will use Embedded CNT Library, if you do not want to use any library you need to use extra #not include <embedded c libray> command. Without #not include <standard c libray> command #not include <embedded c libray> command is useless. None of these features are there in C and C++ and they have only standard libraries.
 4. Standard Package Manager, as you know there is no standard package manager for C/C++ language, instead an external package manager is needed, But CNT language has a Standard Package Manager, thanks to this you do not need to install it externally!
 5. Unsafe blocks, as you know there is no such concept as Unsafe blocks in C/C++ language because these languages ​​are unsafe by default, but there are these blocks in CNT language because CNT language offers stricter security than other C languages ​​and there is a command specific to this language called ''unsafe'' this command is useful for that!
+
+# Target Hello World code
+```
+print("Hello, World!");
