@@ -16,6 +16,8 @@ C New Technology is a programming language developed by Sahne Dünya based on th
 * Underlying programming language: Classic C Programing Languge
 * Modern language features: yes
 * Standard Libray: yes
+* Target source file: 163 MB
+Main programming language: C
 
 # Target Hello World code
 ```
