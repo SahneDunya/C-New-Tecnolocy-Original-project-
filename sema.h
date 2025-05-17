@@ -1,7 +1,7 @@
 #ifndef CNT_COMPILER_SEMA_H
 #define CNT_COMPILER_SEMA_H
 
-// Temel AST başlığı (diğer AST başlıklarını da içerir)
+// Güncellenmiş AST başlıkları (yeni üyelerle)
 #include "ast.h"
 #include "expressions.h"
 #include "statements.h"
@@ -10,26 +10,25 @@
 
 // Yardımcı sistem başlıkları
 #include "diagnostics.h"
-#include "symbol_table.h"
-#include "type_system.h"
-#include "ownership_checker.h"
-#include "module_resolver.h"
+#include "symbol_table.h"      // SymbolInfo, SymbolTable
+#include "type_system.h"       // Type, TypeSystem
+#include "ownership_checker.h" // OwnershipChecker
+#include "module_manager.h"    // ModuleResolver, ModuleInterface
 
 #include <string>
 #include <vector>
 #include <memory>
 #include <unordered_map>
 
-// Visitor pattern kullanmıyorsak, AST düğümlerini gezen ve analiz eden metodlar
-// (Parser'daki parse metotlarına benzer bir yapı, ama anlamsal kontrol yapar)
 
+// Semantic Analyzer sınıfı
 class SemanticAnalyzer {
 private:
     Diagnostics& diagnostics;         // Hata raporlama sistemi
-    SymbolTable symbolTable;          // Kapsam ve sembol yönetimi
-    TypeSystem typeSystem;            // Semantik tip temsilleri ve kontrolleri
-    OwnershipChecker ownershipChecker; // Sahiplik, ödünç alma, yaşam süresi kuralları
-    ModuleResolver moduleResolver;    // Modül ve import çözümlemesi
+    TypeSystem& typeSystem;           // Semantik tip temsilleri ve kontrolleri
+    SymbolTable& symbolTable;         // Kapsam ve sembol yönetimi
+    OwnershipChecker& ownershipChecker; // Sahiplik, ödünç alma, yaşam süresi kuralları
+    ModuleResolver& moduleResolver;   // Modül ve import çözümlemesi
 
     // Traversal sırasında ihtiyaç duyulan durum bilgileri
     Type* currentFunctionReturnType = nullptr; // Şu an analiz edilen fonksiyonun dönüş tipi
@@ -40,6 +39,8 @@ private:
     // =======================================================================
     // AST Düğümlerini Gezen ve Analiz Eden Metodlar
     // Bu metodlar AST yapısına göre birbirini özyinelemeli (recursive) çağırır.
+    // Expression üreten metodlar Type* döndürür ve AST düğümüne resolvedSemanticType'ı yazar.
+    // Statement ve Declaration üreten metodlar genellikle void döner (resolvedSymbol/Type'ları AST'ye yazar).
     // =======================================================================
 
     // Genel düğüm analizcisi (switch/if-else ile türüne göre dallanabilir)
@@ -47,78 +48,74 @@ private:
 
     // Bildirim analizcileri
     void analyzeProgram(ProgramAST* program);
-    void analyzeDeclaration(DeclarationAST* decl); // Türüne göre alt analizcilere dallanır
-    void analyzeFunctionDecl(FunctionDeclAST* funcDecl);
-    void analyzeStructDecl(StructDeclAST* structDecl);
-    void analyzeEnumDecl(EnumDeclAST* enumDecl);
-    void analyzeVarDecl(VarDeclAST* varDecl, bool isGlobal); // Global/Yerel değişken ayrımı yapılabilir
+    void analyzeDeclaration(DeclarationAST* decl); // Türüne göre alt analizcilere dallanır, isPublic'i kontrol eder
+    void analyzeFunctionDecl(FunctionDeclAST* funcDecl); // resolvedSymbol, resolvedSemanticType'ı ayarlar
+    void analyzeStructDecl(StructDeclAST* structDecl);   // resolvedSymbol, resolvedSemanticType'ı ayarlar
+    void analyzeEnumDecl(EnumDeclAST* enumDecl);     // resolvedSymbol, resolvedSemanticType'ı ayarlar
+    void analyzeVarDecl(VarDeclAST* varDecl); // resolvedSymbol, resolvedSemanticType'ı ayarlar (initializer'dan)
 
     // Deyim analizcileri
     void analyzeStatement(StatementAST* stmt); // Türüne göre alt analizcilere dallanır
-    void analyzeBlockStatement(BlockStatementAST* block);
-    void analyzeImportStatement(ImportStatementAST* importStmt);
+    void analyzeBlockStatement(BlockStatementAST* block); // Kapsam girer/çıkar
+    void analyzeImportStatement(ImportStatementAST* importStmt); // ModuleResolver'ı çağırır, resolvedInterface'i ayarlar
     void analyzeReturnStatement(ReturnStatementAST* returnStmt);
     void analyzeBreakStatement(BreakStatementAST* breakStmt);
     void analyzeContinueStatement(ContinueStatementAST* continueStmt);
     void analyzeWhileStatement(WhileStatementAST* whileStmt);
-     void analyzeIfStatement(IfStatementAST* ifStmt); // Eğer if/else destekleniyorsa
-     void analyzeForStatement(ForStatementAST* forStmt); // Eğer for destekleniyorsa
+     void analyzeIfStatement(IfStatementAST* ifStmt);
+     void analyzeForStatement(ForStatementAST* forStmt);
 
 
-    // İfade analizcileri (İfadenin semantik tipini döndürür)
-    Type* analyzeExpression(ExpressionAST* expr); // Türüne göre alt analizcilere dallanır
-    Type* analyzeIntLiteral(IntLiteralAST* literal);
-    Type* analyzeFloatLiteral(FloatLiteralAST* literal);
-    Type* analyzeStringLiteral(StringLiteralAST* literal);
-    Type* analyzeCharLiteral(CharLiteralAST* literal);
-    Type* analyzeBoolLiteral(BoolLiteralAST* literal);
-    Type* analyzeIdentifier(IdentifierAST* identifier); // İsim çözümlemesi ve tipini bulma
-    Type* analyzeBinaryOp(BinaryOpAST* binaryOp);     // Operatör aşırı yüklemesi (overloading) ve tip uyumluluğu
-    Type* analyzeUnaryOp(UnaryOpAST* unaryOp);       // Tekli operatörler ve tip uyumluluğu (&, &mut, *)
-    Type* analyzeAssignment(AssignmentAST* assignment); // Atama kuralları (atanabilirlik, mutability)
-    Type* analyzeCallExpression(CallExpressionAST* call); // Fonksiyon/metot çözümlemesi ve argüman tip kontrolü
-    Type* analyzeMemberAccess(MemberAccessAST* memberAccess); // Üye çözümlemesi ve tipini bulma
-    Type* analyzeIndexAccess(IndexAccessAST* indexAccess); // Index tipinin kontrolü
-    Type* analyzeMatchExpression(MatchExpressionAST* matchExpr); // Match ifadesi, pattern ve kolların analizi
+    // İfade analizcileri (İfadenin semantik tipini döndürür ve AST düğümüne yazar)
+    Type* analyzeExpression(ExpressionAST* expr); // Türüne göre alt analizcilere dallanır, resolvedSemanticType'ı ayarlar
+    Type* analyzeIntLiteral(IntLiteralAST* literal); // resolvedSemanticType'ı ayarlar (IntType)
+    Type* analyzeFloatLiteral(FloatLiteralAST* literal); // resolvedSemanticType'ı ayarlar (FloatType)
+    Type* analyzeStringLiteral(StringLiteralAST* literal); // resolvedSemanticType'ı ayarlar (StringType)
+    Type* analyzeCharLiteral(CharLiteralAST* literal);   // resolvedSemanticType'ı ayarlar (CharType)
+    Type* analyzeBoolLiteral(BoolLiteralAST* literal);   // resolvedSemanticType'ı ayarlar (BoolType)
+    Type* analyzeIdentifier(IdentifierAST* identifier); // İsim çözümlemesi yapar, resolvedSymbol, resolvedSemanticType'ı ayarlar
+    Type* analyzeBinaryOp(BinaryOpAST* binaryOp);     // Operandları analiz eder, tip uyumluluğunu kontrol eder, resolvedSemanticType'ı ayarlar
+    Type* analyzeUnaryOp(UnaryOpAST* unaryOp);       // Operandı analiz eder, tip uyumluluğunu kontrol eder, resolvedSemanticType'ı ayarlar (&,* için ownership/borrowing çağrısı)
+    Type* analyzeAssignment(AssignmentAST* assignment); // Sol/sağ tarafı analiz eder, atanabilirlik/mutability kontrolü, resolvedSemanticType'ı ayarlar
+    Type* analyzeCallExpression(CallExpressionAST* call); // Callee/argümanları analiz eder, resolvedCalleeSymbol, resolvedSemanticType'ı ayarlar, argüman tip kontrolü
+    Type* analyzeMemberAccess(MemberAccessAST* memberAccess); // Base/member'ı analiz eder, resolvedMemberSymbol, resolvedSemanticType'ı ayarlar
+    Type* analyzeIndexAccess(IndexAccessAST* indexAccess); // Base/index'i analiz eder, resolvedSemanticType'ı ayarlar
+    Type* analyzeMatchExpression(MatchExpressionAST* matchExpr); // Value/arms'ı analiz eder, kapsamlılık/erişilebilirlik kontrolü, resolvedSemanticType'ı ayarlar
 
-    // Tip AST düğümlerini semantik tiplere dönüştüren analizciler
-    Type* analyzeTypeAST(TypeAST* typeNode); // Türüne göre alt analizcilere dallanır
-    Type* analyzeBaseTypeAST(BaseTypeAST* baseTypeNode); // İsim çözümlemesi yapıp Struct/Enum tipine dönüştürebilir
-    Type* analyzeReferenceTypeAST(ReferenceTypeAST* refTypeNode);
-    Type* analyzeArrayTypeAST(ArrayTypeAST* arrayTypeNode);
+    // Tip AST düğümlerini analiz eder (Semantik tip objesine pointer döndürür ve AST düğümüne yazar)
+    Type* analyzeTypeAST(TypeAST* typeNode); // Türüne göre alt analizcilere dallanır, resolvedSemanticType'ı ayarlar
+    Type* analyzeBaseTypeAST(BaseTypeAST* baseTypeNode); // İsim çözümlemesi yapıp TypeSystem'den Type* alır, resolvedSemanticType'ı ayarlar
+    Type* analyzeReferenceTypeAST(ReferenceTypeAST* refTypeNode); // resolvedSemanticType'ı ayarlar
+    Type* analyzeArrayTypeAST(ArrayTypeAST* arrayTypeNode);     // resolvedSemanticType'ı ayarlar
     // ... Diğer TypeAST türleri için analizciler
 
     // =======================================================================
     // Anlamsal Kontrol ve Doğrulama Yardımcı Metodları
     // =======================================================================
 
-    // İki semantik tipin eşit olup olmadığını kontrol et
+    // İki semantik tipin eşit olup olmadığını kontrol et (TypeSystem kullanır)
     bool areTypesEqual(Type* t1, Type* t2);
-    // Bir tipin diğerine atanabilir olup olmadığını kontrol et (Mutability dikkate alınır)
+    // Bir tipin diğerine atanabilir olup olmadığını kontrol et (Mutability dikkate alınır) (TypeSystem kullanır)
     bool isAssignable(Type* valueType, Type* targetType, bool isTargetMutable);
 
     // Fonksiyon çağrısının doğru olup olmadığını kontrol et (argüman sayısı/tipi)
-    void checkFunctionCall(CallExpressionAST* callExpr, FunctionDeclAST* targetFunc);
+    void checkFunctionCall(CallExpressionAST* callExpr, SymbolInfo* calleeSymbol); // Callee SymbolInfo'su ile kontrol
 
-    // Match ifadesi için kapsamlılık ve erişilebilirlik kontrolü
+    // Match ifadesi için kapsamlılık ve erişilebilirlik kontrolü (OwnershipChecker veya ayrı helper)
     void checkMatchExhaustiveness(MatchExpressionAST* matchExpr, Type* valueType); // Tüm durumlar ele alınmış mı?
     void checkMatchReachability(MatchExpressionAST* matchExpr); // Ulaşılamayan kollar var mı?
 
-    // Sahiplik, Ödünç Alma, Yaşam Süresi kurallarını uygula
-    // Bu metodlar OwnershipChecker sınıfının metodlarını çağıracaktır.
-    void enforceOwnershipRules(ASTNode* node); // Genel çağrı
-    // ... Belirli durumlar için daha detaylı çağrılar (örn: checkBorrow(expr), recordMove(vardecl))
+    // Belirli bir bildirim türünün public olmasına izin verilip verilmediğini kontrol et
+    bool isValidPublicDeclarationType(const ASTNode* node) const;
 
 
-    // AST düğümlerine semantik bilgi ekle (Annotations/Decorations)
-    // Örneğin, bir IdentifierAST düğümüne çözümlenmiş SymbolInfo* veya Type* pointer'ı ekleyebiliriz.
-    // AST düğümlerinizin bu bilgileri tutacak üyelere sahip olması gerekir.
-     void attachTypeInfo(ExpressionAST* expr, Type* type);
-     void attachDeclarationInfo(IdentifierAST* id, SymbolInfo* symbol);
+    // Sahiplik, Ödünç Alma, Yaşam Süresi kurallarını uygula (OwnershipChecker'ı çağırır)
+     void enforceOwnershipRules(ASTNode* node); // Genel çağrı
+    // ... Belirli durumlar için daha detaylı çağrılar
 
 
 public:
-    // Kurucu: Yardımcı sistemlerin referanslarını veya pointerlarını alır
+    // Kurucu: Yardımcı sistemlerin referanslarını alır
     SemanticAnalyzer(Diagnostics& diag, TypeSystem& ts, SymbolTable& st, OwnershipChecker& oc, ModuleResolver& mr);
 
     // Semantik analizi başlatan ana metod
