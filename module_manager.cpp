@@ -1,16 +1,13 @@
 #include "module_manager.h"
-#include <fstream>      // Dosya okuma/yazma için
+#include "utils.h" // cnt_compiler::splitString gibi yardımcılar için
+
+#include <fstream>      // Dosya okuma için
 #include <sstream>      // String stream için
 #include <filesystem>   // Dosya sistemi işlemleri için (C++17)
 
-// Semantik sistem implementasyonları (Include edilmez, başlık yeterli)
- #include "symbol_table.cpp"
- #include "type_system.cpp"
-
-
 // Module Resolver Kurucu
-ModuleResolver::ModuleResolver(Diagnostics& diag, TypeSystem& ts /*, SymbolTable& st*/)
-    : diagnostics(diag), typeSystem(ts) /*, symbolTable(st)*/ {
+ModuleResolver::ModuleResolver(Diagnostics& diag, TypeSystem& ts)
+    : diagnostics(diag), typeSystem(ts) {
     // Kurulum işlemleri
 }
 
@@ -18,16 +15,28 @@ ModuleResolver::ModuleResolver(Diagnostics& diag, TypeSystem& ts /*, SymbolTable
 void ModuleResolver::setImportSearchPaths(const std::vector<std::string>& paths) {
     importSearchPaths.clear();
     for (const auto& p : paths) {
-        importSearchPaths.push_back(std::filesystem::canonical(p)); // Yolları normalize et
+         addImportSearchPath(p); // Her yolu addImportSearchPath ile ekle (normalize etmek için)
     }
 }
+
+// Bir arama yolu ekler (normalize edilmiş)
+void ModuleResolver::addImportSearchPath(const std::filesystem::path& path) {
+     std::error_code ec;
+     std::filesystem::path canonicalPath = std::filesystem::canonical(path, ec);
+     if (ec) {
+          diagnostics.reportWarning("", 0, 0, "Import arama yolu '" + path.string() + "' geçerli değil: " + ec.message());
+          return; // Geçersiz yolu ekleme
+     }
+     importSearchPaths.push_back(canonicalPath);
+}
+
 
 // Modül yolundan (örn: ["std", "io"]) beklenen .hnt dosyasının yolunu arama dizinlerinde bulur
 std::optional<std::filesystem::path> ModuleResolver::findModuleInterfaceFile(const std::vector<std::string>& modulePathSegments) const {
     if (modulePathSegments.empty()) return std::nullopt;
 
     // Kanonik dosya adını oluştur (örn: "io.hnt")
-    std::string filename = modulePathSegments.back() + ".hnt";
+    std::string filename = modulePathSegments.back() + InterfaceExtractor::interfaceFileExtension;
 
     // Modül yolunun kalanından dizin yolunu oluştur (örn: "std/")
     std::filesystem::path moduleDir;
@@ -38,8 +47,10 @@ std::optional<std::filesystem::path> ModuleResolver::findModuleInterfaceFile(con
     // Her arama yolunda dosyayı ara
     for (const auto& searchPath : importSearchPaths) {
         std::filesystem::path fullPath = searchPath / moduleDir / filename;
-        if (std::filesystem::exists(fullPath)) {
-            return fullPath; // Bulunan ilk yolu döndür
+        std::error_code ec; // Hata kodu için
+        if (std::filesystem::exists(fullPath, ec)) {
+            if (!ec) return fullPath; // Bulunan ilk yolu döndür (hata yoksa)
+            else diagnostics.reportWarning("", 0, 0, "Dosya varlık kontrol hatası: " + fullPath.string() + " - " + ec.message());
         }
     }
 
@@ -48,102 +59,146 @@ std::optional<std::filesystem::path> ModuleResolver::findModuleInterfaceFile(con
 
 // Bir .hnt dosyasını okuyup ModuleInterface yapısına ayrıştırır (Deserialize)
 // **ÖNEMLİ:** Bu metodun implementasyonu, .hnt dosya formatınıza bağlıdır!
+// .hnt'deki CNT arayüz bilgilerini SymbolInfo ve Type* objelerine dönüştürür.
+// C/C++ deklarasyonlarını ayrıştırmayı da içerebilir veya bunları farklı ele alabilir.
 std::shared_ptr<ModuleInterface> ModuleResolver::parseModuleInterfaceFile(const std::filesystem::path& filePath, const std::string& canonicalPath) {
     // .hnt dosyasını aç
     std::ifstream file(filePath);
     if (!file.is_open()) {
-        diagnostics.reportInternalError("Modül arayüz dosyası açılamadı: " + filePath.string());
+        diagnostics.reportError("", 0, 0, "Modül arayüz dosyası açılamadı: " + filePath.string());
         return nullptr;
     }
 
     // ModuleInterface objesini oluştur
     auto moduleInterface = std::make_shared<ModuleInterface>(canonicalPath, filePath.string());
 
-    // Dosya içeriğini oku ve arayüz bilgilerini (public semboller, tipler vb.) ayrıştır.
-    // Bu, kendi yazacağınız bir .hnt parser'ı gerektirir.
-    // Örneğin, dosya içinde "pub fn add(a: int, b: int) -> int;" gibi tanımlar olabilir.
-    // Bu tanımları okuyacak, semantik tiplere (TypeSystem kullanarak) ve sembol bilgilerine (SymbolInfo) dönüştürecek
-    // ve bunları moduleInterface->publicSymbols haritasına ekleyeceksiniz.
+    // Dosya içeriğini satır satır veya bloğa göre oku ve arayüz bilgilerini ayrıştır.
+    // Bu kısım, .hnt dosya formatınızın sözdizimini/yapısını anlayan bir parser gerektirir.
+    // Sembol isimlerini, türlerini (serialize edilmiş string formatında) ve diğer public özellikleri okuyacaksınız.
+    // Okuduğunuz tip stringlerini (örn: "fn(int, string) -> bool"), Tip Sistemini (typeSystem) kullanarak
+    // karşılık gelen semantik Type* objelerine dönüştürmeniz gerekecek (deserialize).
 
-    // Örnek (Çok basit bir konsept, gerçek parser çok daha karmaşık olacaktır):
-     std::string line;
-     while (std::getline(file, line)) {
-    //     // Satırı ayrıştır (örn: "pub fn name (args) -> ret_type ;")
-    //     // İsimi, tipi vb. çıkar
-    //     // TypeSystem'den semantik tipleri al
-    //     // SymbolInfo oluştur
-          moduleInterface->addPublicSymbol(name, symbolInfo);
-     }
+    std::string line;
+    int lineNumber = 0; // Hata raporlama için satır numarası
+    while (std::getline(file, line)) {
+        lineNumber++;
+        line = cnt_compiler::trim(line); // Baştaki/sondaki boşlukları kırp
+        if (line.empty() || line.rfind("//", 0) == 0) continue; // Boş satırları ve yorumları atla
 
-    // Eğer .hnt formatı başka modüllere bağımlılık (import) belirtiyorsa,
-    // bu bağımlılıkları da burada çözümleyip yüklemelisiniz (recursive load).
-     loadDependencies(*moduleInterface);
+        // Örnek Ayrıştırma Mantığı İskeleti (Basit "pub fn name(...) -> type;" formatını varsayar)
+        // Gerçek bir parser çok daha karmaşık olacaktır.
+
+        if (line.rfind("pub ", 0) == 0) { // "pub " ile başlıyorsa
+            std::string publicDecl = cnt_compiler::trim(line.substr(4)); // "pub " kısmını atla
+
+            // Bildirim türünü belirle (fn, struct, enum, let/mut)
+            if (publicDecl.rfind("fn ", 0) == 0) {
+                // Fonksiyon bildirimi ayrıştır (isim, parametre tipleri, dönüş tipi)
+                 stringstream ss(publicDecl.substr(3)); // "fn " kısmını atla
+                 std::string funcName; ss >> funcName;
+                // ... Parametre ve dönüş tipi stringlerini oku
+                 Type* semanticFuncType = typeSystem.deserializeFunctionType(ss); // Tip Sisteminde böyle bir metod olmalı
+                 if (semanticFuncType) {
+                      auto funcSymbol = std::make_shared<SymbolInfo>(funcName, semanticFuncType, nullptr, false);
+                      funcSymbol->kind = SymbolInfo::FUNCTION_KIND; // Sembol türünü ayarla
+                      moduleInterface->addPublicSymbol(funcName, funcSymbol);
+                 } else {
+                      diagnostics.reportError(filePath.string(), lineNumber, 0, "Fonksiyon imzası ayrıştırılamadı: " + line);
+                 }
+                 diagnostics.reportWarning(filePath.string(), lineNumber, 0, ".hnt ayrıştırıcı implementasyonu eksik (Fonksiyon). Satır: " + line); // Placeholder
+
+            } else if (publicDecl.rfind("struct ", 0) == 0) {
+                 // Struct bildirimi ayrıştır (isim, alanlar ve tipleri)
+                  stringstream ss(publicDecl.substr(7)); // "struct " kısmını atla
+                  std::string structName; ss >> structName;
+                 // ... Alan isimlerini ve tip stringlerini oku
+                  Type* semanticStructType = typeSystem.deserializeStructType(ss); // Tip Sisteminde böyle bir metod olmalı
+                  if (semanticStructType) {
+                      auto structSymbol = std::make_shared<SymbolInfo>(structName, semanticStructType, nullptr, false);
+                      structSymbol->kind = SymbolInfo::STRUCT_KIND; // Sembol türünü ayarla
+                      moduleInterface->addPublicSymbol(structName, structSymbol);
+                  } else {
+                      diagnostics.reportError(filePath.string(), lineNumber, 0, "Struct tanımı ayrıştırılamadı: " + line);
+                  }
+                  diagnostics.reportWarning(filePath.string(), lineNumber, 0, ".hnt ayrıştırıcı implementasyonu eksik (Struct). Satır: " + line); // Placeholder
+
+            } // ... Diğer bildirim türleri (enum, global var)
+
+            else {
+                 diagnostics.reportWarning(filePath.string(), lineNumber, 0, "Tanımlanamayan public bildirim formatı: " + line);
+            }
+        }
+        // C/C++ deklarasyonları da .hnt içindeyse, onları burada parse edip ayrı tutmanız veya
+        // farklı bir şekilde işlemeniz gerekebilir.
+
+    }
 
     file.close();
+
+    // (Opsiyonel) loadDependencies çağrısı yapılabilir eğer .hnt dosyası başka importlar belirtiyorsa.
+
     return moduleInterface;
 }
+
 
 // İmport edilen sembolleri hedef sembol tablosuna ekler
 void ModuleResolver::addImportedSymbolsToScope(const ModuleInterface& interface, SymbolTable& targetSymbolTable, const std::string& alias) {
     if (alias.empty()) {
         // Alias yoksa, public sembolleri doğrudan mevcut kapsama ekle
+        // Sembol tablosunun insert metodu çakışmaları yönetmelidir.
         for (const auto& pair : interface.publicSymbols) {
             const std::string& name = pair.first;
             std::shared_ptr<SymbolInfo> symbol = pair.second;
 
-            // Sembolün mevcut kapsamda çakışmadığını kontrol et (isteğe bağlı, SEMA da yapabilir)
-             if (targetSymbolTable.lookupCurrentScope(name)) {
-                  diagnostics.reportError(... "İmport edilen isim '" + name + "' zaten mevcut kapsamda tanımlı.");
-                  continue; // Bu sembolü ekleme
+            // Sembolü hedef sembol tablosuna ekle.
+            // Eğer çakışma olursa insert false döner veya hata raporlanır (Sembol Tablosu implementasyonu).
+            // Çakışma durumunda SEMA'nın hata raporlaması daha uygun olabilir,
+            // ancak ModuleResolver burada da bir uyarı verebilir.
+             if (!targetSymbolTable.insert(name, symbol)) {
+                 // Sembol Tablosu insert hata raporlamıyorsa, burada biz yapmalıyız.
+                 // SEMA'nın import deyimini analiz ederken sembol çözümlemesi yapması ve
+                 // isim çakışmasını SEMA'da yakalaması daha yaygın bir yaklaşımdır.
+                 // Bu durumda bu addImportedSymbolsToScope sadece sembolleri ekler, çakışma kontrolünü SEMA'ya bırakır.
+                  diagnostics.reportWarning(... "Import edilen isim '" + name + "' mevcut kapsamda çakışıyor.");
              }
-
-            // Sembolü hedef sembol tablosuna ekle
-            targetSymbolTable.insert(name, symbol);
-             // Not: Sembol tablosu SymbolInfo'nun kopyasını mı tutacak, yoksa paylaşılan pointer mı?
-             // shared_ptr kullanmak, farklı kapsamlardan aynı sembol bilgisine erişimi sağlar.
         }
     } else {
-        // Alias varsa, modül arayüzünü alias ismiyle bir sembol olarak ekle
-        // Bu sembolün tipi özel bir "Modül Tipi" olabilir veya sembol tablosunda bir scope'u işaret edebilir.
-        // En basit yol, alias ismini bir "Namespace" veya "Module" sembolü olarak ekleyip,
-        // bu sembolün altında import edilen public sembolleri saklamak.
-        // Sembol tablonuzun namespace/scope sembollerini desteklemesi gerekir.
+        // Alias varsa, modül arayüzünü alias ismiyle bir namespace/modül sembolü olarak ekle
+        // Bu, sembol tablosunun namespace/scope sembollerini desteklemesini gerektirir.
+        // import io as sys; -> sys.print() şeklinde kullanım için.
 
-        // Örnek (Sembol tablosunun namespace/module sembollerini desteklediğini varsayarsak):
-         auto moduleSymbol = std::make_shared<SymbolInfo>(alias, nullptr, nullptr, false); // Tipi özel ModuleType* olabilir
+        // Örnek: Alias ismini bir sembol olarak ekle (Sembol tablosu namespace/modül türünü desteklemeli)
+         auto moduleSymbol = std::make_shared<SymbolInfo>(alias, nullptr, nullptr, false); // Type özel ModuleType* olabilir
          moduleSymbol->kind = SymbolInfo::MODULE_KIND; // Sembol türünü belirt
-         moduleSymbol->moduleInterface = &interface; // Veya ModuleInterface'e pointer/referans tut
+         moduleSymbol->moduleInterface = &interface; // Veya ModuleInterface'e pointer/referans tutulabilir
 
          if (targetSymbolTable.insert(alias, moduleSymbol)) {
-        //      // Başarılı ekleme, şimdi bu alias sembolü altında public sembolleri saklayın.
-        //      // Sembol tablonuzun iç içe sembol haritalarını yönetmesi gerekir.
+        //      // Başarılı ekleme, şimdi bu alias sembolü altında public sembolleri erişilebilir yapın.
+        //      // Bu SymbolTable implementasyonuna bağlıdır. Belki alias sembolü altındaki scope'a sembolleri ekleriz.
                targetSymbolTable.addSymbolsToNamespace(alias, interface.publicSymbols);
+              diagnostics.reportWarning(interface.filePath, 0, 0, "Aliasli importların sembol tablosuna eklenmesi implemente edilmedi."); // Placeholder
          } else {
-             diagnostics.reportError(... "Alias ismi '" + alias + "' zaten mevcut kapsamda tanımlı.");
+             diagnostics.reportError(... "Alias ismi '" + alias + "' mevcut kapsamda çakışıyor.");
          }
         diagnostics.reportWarning(interface.filePath, 0, 0, "Aliasli import implementasyonu eksik."); // Placeholder
-         // Alias implementasyonu daha karmaşık olacaktır.
     }
 }
 
+
 // Bir import ifadesini çözümleyip sembollerini hedef sembol tablosuna ekler
 bool ModuleResolver::resolveImportStatement(ImportStatementAST* importStmt, SymbolTable& targetSymbolTable) {
+    if (!importStmt) return false;
+
     // Modül yolu segmentlerini al (örn: ["std", "io"])
     const auto& pathSegments = importStmt->path;
     if (pathSegments.empty()) {
-        diagnostics.reportError(importStmt->location.filename, importStmt->location.line, importStmt->location.column,
-                                "İmport ifadesinde modül yolu boş olamaz.");
+        // Bu hata parser'da yakalanmalı, ama burada da kontrol edebiliriz.
+        diagnostics.reportError(importStmt->location, "İmport ifadesinde modül yolu boş olamaz.");
         return false;
     }
 
     // Kanonik modül yolunu oluştur (örn: "std::io")
-    std::string canonicalPath;
-    for (size_t i = 0; i < pathSegments.size(); ++i) {
-        canonicalPath += pathSegments[i];
-        if (i < pathSegments.size() - 1) {
-            canonicalPath += "::";
-        }
-    }
+    std::string canonicalPath = cnt_compiler::joinStrings(pathSegments, "::");
 
     // Cache'de ara
     std::shared_ptr<ModuleInterface> moduleInterface = getLoadedInterface(canonicalPath);
@@ -152,8 +207,7 @@ bool ModuleResolver::resolveImportStatement(ImportStatementAST* importStmt, Symb
         // Cache'de yoksa, .hnt dosyasını bulmaya çalış
         auto filePath = findModuleInterfaceFile(pathSegments);
         if (!filePath) {
-            diagnostics.reportError(importStmt->location.filename, importStmt->location.line, importStmt->location.column,
-                                    "Modül '" + canonicalPath + "' bulunamadı.");
+            diagnostics.reportError(importStmt->location, "Modül '" + canonicalPath + "' bulunamadı. Arama yolları kontrol edildi.");
             return false;
         }
 
@@ -166,6 +220,10 @@ bool ModuleResolver::resolveImportStatement(ImportStatementAST* importStmt, Symb
 
         // Yüklenen arayüzü cache'e ekle
         loadedInterfaces[canonicalPath] = moduleInterface;
+        diagnostics.reportInfo(importStmt->location, "Modül arayüzü başarıyla yüklendi: '" + canonicalPath + "' from '" + filePath->string() + "'");
+    } else {
+        // Cache'den yüklendi
+         diagnostics.reportInfo(importStmt->location, "Modül arayüzü cache'den yüklendi: '" + canonicalPath + "'");
     }
 
     // İmport edilen sembolleri hedef sembol tablosuna ekle
@@ -173,100 +231,22 @@ bool ModuleResolver::resolveImportStatement(ImportStatementAST* importStmt, Symb
     std::string aliasName = importStmt->alias ? importStmt->alias->name : "";
     addImportedSymbolsToScope(*moduleInterface, targetSymbolTable, aliasName);
 
-    diagnostics.reportInfo(importStmt->location.filename, importStmt->location.line, importStmt->location.column,
-                           "Modül '" + canonicalPath + "' başarıyla yüklendi ve sembolleri eklendi."); // Bilgilendirme mesajı
+    // Çözümlenen arayüzü AST düğümüne ekle (SEMA bu pointer'ı kullanır)
+    importStmt->resolvedInterface = moduleInterface;
 
     return true;
 }
 
-// Kanonik yoluna göre yüklenmiş bir modül arayüzünü döndürür (cache'den)
-std::shared_ptr<ModuleInterface> ModuleResolver::getLoadedInterface(const std::string& canonicalPath) const {
+// Kanonik yoluna göre yüklenmiş bir modül arayüzünü döndürür (cache'den veya yükler)
+std::shared_ptr<ModuleInterface> ModuleResolver::getLoadedInterface(const std::string& canonicalPath) {
+    // Burada sadece cache'den dönme mantığı var.
+    // Eğer istenirse, cache'de yoksa burada find/parse/cache yapma mantığı da eklenebilir,
+    // ancak resolveImportStatement'ın ana giriş noktası olması daha yaygın.
+    // Bu metod, daha çok dahili kullanım veya hata ayıklama için cache'e erişim sağlar.
+
     if (loadedInterfaces.count(canonicalPath)) {
         return loadedInterfaces.at(canonicalPath);
     }
+    // Cache'de yoksa null döner. resolveImportStatement bulma ve yükleme işlemini yapar.
     return nullptr;
 }
-
-
-// =======================================================================
-// Otomatik Arayüz Çıkarımı (Çok karmaşık - İskelet Implementasyonu)
-// Bu işlevler genellikle Semantic Analysis veya Code Generation sonrası çağrılır.
-// =======================================================================
-
-// Derlenmiş bir modülün (ProgramAST) public arayüzünü çıkarır
-std::shared_ptr<ModuleInterface> ModuleResolver::extractInterface(ProgramAST* program) {
-    // Program AST'sinin dosya adını al
-    std::string filename = program->location.filename;
-    // Dosya adından kanonik modül yolunu belirle (örn: src/my_module.cnt -> my_module veya std::my_module gibi)
-    // Bu, projenin yapısına ve modül isimlendirme kurallarına bağlıdır.
-    std::string canonicalPath = "unknown_module"; // Placeholder
-
-    auto moduleInterface = std::make_shared<ModuleInterface>(canonicalPath, filename);
-
-    // AST üzerindeki bildirimleri gez
-    for (const auto& decl_ptr : program->declarations) {
-        // Bildirimin public olup olmadığını belirle (CNT'de 'pub' anahtar kelimesi varsayalım)
-        // AST düğümünüzde isPublic gibi bir bayrak olmalı veya attribute'ları kontrol etmelisiniz.
-        bool isPublic = false; // Placeholder
-
-        // Eğer public ise, bu bildirime ait semantik bilgiyi çıkar
-        if (isPublic) {
-            // Bildirimin türüne göre (Fonksiyon, Struct, Enum, Global Var)
-            // İlgili semantik SymbolInfo veya Tip bilgisini al (SEMA tarafından AST'ye eklenmiş olmalı)
-             SymbolInfo* symbol = decl_ptr->resolvedSymbol; // Eğer AST düğümünde sembol bilgisi varsa
-             Type* semanticType = decl_ptr->resolvedSemanticType; // Veya tip bilgisi
-
-            // Eğer geçerli sembol ve tip bilgisi varsa, ModuleInterface'e ekle
-             if (symbol && semanticType) {
-                  moduleInterface->addPublicSymbol(symbol->name, std::make_shared<SymbolInfo>(*symbol)); // SymbolInfo'nun kopyasını paylaş
-                  Eğer SymbolInfo içinde pointerlar varsa (örn: DeclarationAST*), kopyalama dikkatli yapılmalı.
-                 // Genellikle ModuleInterface, kendi SymbolInfo ve Type kopyalarını tutar.
-             }
-             diagnostics.reportWarning(decl_ptr->location.filename, decl_ptr->location.line, decl_ptr->location.column, "Arayüz çıkarımı implementasyonu eksik."); // Placeholder
-        }
-    }
-
-    return moduleInterface;
-}
-
-// Çıkarılan modül arayüzünü .hnt dosyasına kaydeder (Serialize)
-// **ÖNEMLİ:** Bu metodun implementasyonu, .hnt dosya formatınıza bağlıdır!
-bool ModuleResolver::saveInterface(const ModuleInterface& interface, const std::filesystem::path& outputPath) {
-    // Çıktı dizininin var olduğundan emin ol
-    std::filesystem::create_directories(outputPath.parent_path());
-
-    // .hnt dosyasını yazma modunda aç
-    std::ofstream file(outputPath);
-    if (!file.is_open()) {
-        diagnostics.reportError("", 0, 0, "Modül arayüz dosyası yazılamadı: " + outputPath.string());
-        return false;
-    }
-
-    // ModuleInterface içeriğini (.hnt formatına göre) dosyaya yaz
-    // Bu, publicSymbols'daki her sembolü veya publicDeclarations'daki her bildirimi
-    // .hnt dosya formatının sözdizimine göre serialize edecek bir mantık gerektirir.
-    // Örneğin, fonksiyon imzaları, struct alanları, enum varyantları gibi bilgileri yazmalısınız.
-
-    // Örnek (Çok basit bir yazma konsepti):
-     file << "// CNT Module Interface: " << interface.canonicalPath << std::endl;
-     for (const auto& pair : interface.publicSymbols) {
-         const std::string& name = pair.first;
-         const SymbolInfo& symbol = *pair.second;
-    //     // Sembol türüne göre formatlı yaz (örn: "pub fn name(args) -> ret_type;")
-          file << "pub " << symbol.kind_string << " " << name << " : " << symbol.type->toString() << ";" << std::endl;
-     }
-
-    // Modülün bağımlılıklarını (importlarını) da .hnt dosyasına kaydetmek faydalı olabilir.
-
-    file.close();
-     diagnostics.reportInfo("", 0, 0, "Modül arayüz dosyası kaydedildi: " + outputPath.string()); // Bilgilendirme
-    return true;
-}
-
-// Kanonik yoluna göre yüklenmiş bir modül arayüzünü döndürür (cache'den) - Tekrar tanım, cpp dosyasında olmalıydı
- std::shared_ptr<ModuleInterface> ModuleResolver::getLoadedInterface(const std::string& canonicalPath) const {
-     if (loadedInterfaces.count(canonicalPath)) {
-         return loadedInterfaces.at(canonicalPath);
-     }
-     return nullptr;
- }
