@@ -7,75 +7,66 @@
 #include <memory> // std::unique_ptr için
 #include <string>
 
+// Token'ın konum bilgisini temsil eden yapı (Token'dan veya ayrı bir yapıdan alabiliriz)
+// Eğer Token yapınız zaten location içeriyorsa bunu kullanabilirsiniz,
+// veya daha esnek bir yapı için ayrı bir struct tanımlayabilirsiniz:
+struct TokenLocation {
+    std::string filename;
+    int line;
+    int column;
+    // Varsayılan kurucu
+    TokenLocation() : filename(""), line(0), column(0) {}
+    // Token'dan kurucu
+    TokenLocation(const Token& t) : filename(t.filename), line(t.line), column(t.column) {}
+    TokenLocation(std::string fn, int l, int c) : filename(std::move(fn)), line(l), column(c) {}
+};
+
+
 // AST düğümlerinin temel sınıfı
 // Her AST düğümü, kaynak kodundaki konumunu tutabilir (hata raporlama için)
 struct ASTNode {
-    TokenLocation location; // Token veya ilk token'ın konumu
+    TokenLocation location; // Kaynak kodundaki başlangıç konumu
 
     // Sanal yıkıcı (virtual destructor) polymorphic delete için gereklidir
     virtual ~ASTNode() = default;
 
     // Hata ayıklama için düğüm türünü döndüren sanal metod
     virtual std::string getNodeType() const = 0; // Saf sanal fonksiyon
+
+    // (İsteğe bağlı) Bir Visitor pattern uygulamayı düşünüyorsanız sanal accept metodu
+     virtual void accept(ASTVisitor& visitor) = 0;
 };
 
 // Programın tamamını temsil eden kök düğüm
+// declarations.h'tan DeclarationAST'i kullanır
+struct DeclarationAST; // İleri bildirim
+
 struct ProgramAST : public ASTNode {
-    std::vector<std::unique_ptr<ASTNode>> declarations; // Fonksiyonlar, structlar, enumlar vb.
+    std::vector<std::unique_ptr<DeclarationAST>> declarations; // Fonksiyonlar, structlar, enumlar vb.
 
     std::string getNodeType() const override { return "ProgramAST"; }
 
     // Çocuk düğümleri eklemek için yardımcı metod (isteğe bağlı)
-    void addDeclaration(std::unique_ptr<ASTNode> decl) {
-        declarations.push_back(std::move(decl));
-    }
+    void addDeclaration(std::unique_ptr<DeclarationAST> decl); // Implementasyonu .cpp dosyasında
 };
 
-// Diğer temel AST düğüm kategorileri (Bunlar daha sonra ayrı dosyalara ayrılabilir)
-// Bildirimler (Declarations): Fonksiyon, Struct, Enum, Global Değişken
-struct DeclarationAST : public ASTNode {
-     virtual std::string getNodeType() const override { return "DeclarationAST"; }
-};
-
-// Deyimler (Statements): Atama, Kontrol Yapıları (if, match), Döngüler, Return, Break, Continue, Import
+// Diğer temel AST düğüm kategorileri
+// Bunlar sadece arayüzlerdir, somut sınıflar diğer başlıklarda olacak.
 struct StatementAST : public ASTNode {
     virtual std::string getNodeType() const override { return "StatementAST"; }
 };
 
-// İfadeler (Expressions): Aritmetik, Mantıksal, Karşılaştırma, Fonksiyon Çağrısı, Değişmezler
 struct ExpressionAST : public ASTNode {
     virtual std::string getNodeType() const override { return "ExpressionAST"; }
 };
 
-// Tip İfadeleri (Types): int, float, MyStruct, &T, &mut T
+struct DeclarationAST : public ASTNode {
+     virtual std::string getNodeType() const override { return "DeclarationAST"; }
+};
+
 struct TypeAST : public ASTNode {
      virtual std::string getNodeType() const override { return "TypeAST"; }
 };
 
-
-// Örnek: Basit bir Integer Literal AST düğümü
-struct IntLiteralAST : public ExpressionAST {
-    int value; // Değişmezin değeri
-
-    IntLiteralAST(int val, TokenLocation loc) : value(val) { location = loc; }
-
-     std::string getNodeType() const override { return "IntLiteralAST"; }
-};
-
-// Örnek: Basit bir Binary Operatör AST düğümü (a + b gibi)
-struct BinaryOpAST : public ExpressionAST {
-    Token::Type op; // Operatörün token türü (+, -, * vb.)
-    std::unique_ptr<ExpressionAST> left; // Sol operand
-    std::unique_ptr<ExpressionAST> right; // Sağ operand
-
-    BinaryOpAST(Token::Type o, std::unique_ptr<ExpressionAST> l, std::unique_ptr<ExpressionAST> r, TokenLocation loc)
-        : op(o), left(std::move(l)), right(std::move(r)) { location = loc; }
-
-     std::string getNodeType() const override { return "BinaryOpAST"; }
-};
-
-// Not: Dilinizin tüm sözdizimsel yapıları için (fonksiyonlar, structlar, match ifadeleri vb.)
-// ilgili AST düğümlerini burada veya ayrı başlıklarda tanımlamanız gerekecektir.
-// Örn: FunctionDeclAST, MatchExpressionAST, IfStatementAST, ImportStatementAST vb.
 
 #endif // CNT_COMPILER_AST_H
