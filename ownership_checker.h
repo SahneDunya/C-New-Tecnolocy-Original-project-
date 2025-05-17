@@ -1,114 +1,175 @@
 #ifndef CNT_COMPILER_OWNERSHIP_CHECKER_H
 #define CNT_COMPILER_OWNERSHIP_CHECKER_H
 
-#include "ast.h" // AST düğümleri için
-#include "diagnostics.h" // Hata raporlama için
-#include "symbol_table.h" // Sembol bilgileri için (kim sahip, kim ödünç aldı vb.)
-#include "type_system.h" // Tiplerin copy edilebilir olup olmadığı için
+#include "diagnostics.h" // Hata raporlama
+#include "type_system.h" // Tip Sistemi (Copy, Drop, tipler)
+#include "symbol_table.h" // Sembol Tablosu (SymbolInfo, Scope)
+#include "ast.h"         // AST düğümleri (TokenLocation, ASTNode)
+// AST düğümlerinin alt sınıfları da gerekebilir (FunctionCallAST, UnaryOpAST vb.)
+#include "expressions.h"
+#include "statements.h"
+#include "declarations.h"
 
-#include <unordered_map>
-#include <unordered_set>
+
+#include <unordered_map> // Durum takibi için
 #include <vector>
-#include <memory>
-
-// İleri bildirimler
- struct ASTVisitor; // Visitor pattern kullanıyorsanız
-
-// Değişkenin o anki durumunu temsil eden enum
-enum VariableState {
-    OWNED,        // Değişken değere sahip
-    BORROWED_IMMUT, // Başkası tarafından immutable (&) ödünç alınmış
-    BORROWED_MUT,   // Başkası tarafından mutable (&mut) ödünç alınmış
-    MOVED,        // Değer başka yere taşınmış, değişken geçersiz
-    PARTIALLY_MOVED, // Struct/enum gibi bir kısmının taşındığı durum
-    COPIED        // Değer kopyalanabilir, değişken hala geçerli (Copy trait/özelliği olan tipler için)
-    // ... Diğer durumlar (örn: Uninitialized)
-};
-
-// Ödünç alma bilgisi
-struct BorrowInfo {
-    ASTNode* borrowerNode; // Ödünç alan ifadenin AST düğümü
-    TokenLocation borrowLocation; // Ödünç almanın yapıldığı kaynak kod konumu
-    bool isMutable;       // &mut ödünç alma mı?
-    // Lifetime bilgisi burada veya ayrı bir yapıda tutulabilir.
-     void* lifetime; // Yaşam süresini temsil eden bir ID veya pointer
-};
-
-// Değişken veya değer için sahiplik ve ödünç alma durumu
-struct ValueStatus {
-    VariableState state = OWNED; // Varsayılan durum
-    std::vector<BorrowInfo> activeBorrows; // O anki aktif ödünç almalar
-    ASTNode* lastUseNode = nullptr; // Değerin en son kullanıldığı AST düğümü (Move tespiti için)
-    TokenLocation declarationLocation; // Tanımlandığı konum
-    bool isCopyType = false; // Bu tip kopyalanabilir mi?
-
-    // Varsayılan kurucu
-    ValueStatus() = default;
-
-     // Bildirimden oluştururken
-    ValueStatus(TokenLocation declLoc, bool copyType)
-        : declarationLocation(declLoc), isCopyType(copyType) {}
-
-    // Belirli bir noktadaki durumu kopyala (snapshot)
-    ValueStatus clone() const {
-        ValueStatus copy = *this;
-        // activeBorrows'u da kopyala
-        return copy;
-    }
-};
+#include <string>
+#include <memory>        // shared_ptr için (SymbolInfo)
 
 
-// Sahiplik ve Ödünç Alma Kurallarını Kontrol Eden Sınıf
-class OwnershipChecker {
-private:
-    Diagnostics& diagnostics; // Hata raporlama
-    TypeSystem& typeSystem;   // Tip bilgisi (Copy trait vb.)
+namespace cnt_compiler { // Derleyici yardımcıları için isim alanı
 
-    // Değişkenlerin/değerlerin durumunu takip eden harita
-    // AST düğümlerine (VarDeclAST) veya SymbolInfo'ya karşılık gelebilir.
-    // Karmaşık durumlar için ValueStatus'ı SymbolInfo'ya eklemek veya ayrı bir harita kullanmak gerekebilir.
-    // Örneğin: FunctionArgAST'ler, return değerleri, temporary değerler de sahiplik durumuna sahip olabilir.
-    // Şimdilik basitçe VarDeclAST* -> ValueStatus eşlemesi yapalım.
-    std::unordered_map<const VarDeclAST*, ValueStatus> variableStates;
+    // Bir değişkenin anlık durumunu temsil eden enum
+    enum class VariableStatus {
+        Owned,           // Değişken değere sahip
+        Moved,           // Değer başka bir yere taşındı (artık geçerli değil)
+        BorrowedImmutable, // Değişkene şu anda & referansı var
+        BorrowedMutable, // Değişkene şu anda &mut referansı var
+        Dropped,         // Değişken kapsamdan çıktı ve değeri Drop edildi
+        Uninitialized,   // Değişken tanımlandı ama değeri atanmadı (SEMA da kontrol eder)
+         PartiallyMoved // Struct alanları gibi kısmi taşıma için (Daha gelişmiş)
+    };
 
-    // Traversal sırasında scope'a özgü borrow/ownership state'ini tutmak gerekebilir
-    // Örneğin, bir bloktan çıkarken ödünç almaların geçerliliği biter.
-     std::vector<std::unordered_map<const VarDeclAST*, ValueStatus>> scopeStates; // Kapsam yığını gibi
+    // Bir değişken kullanımının türünü temsil eden enum
+    enum class UseKind {
+        Read,           // Değer okunuyor (örn: x + 1)
+        Write,          // Değer değiştiriliyor (örn: x = 5)
+        Move,           // Değer sahipliği taşınıyor (örn: func(x), y = x)
+        BorrowImmutable, // &x referansı alınıyor
+        BorrowMutable    // &mut x referansı alınıyor
+         CallAsMethod, // Metot çağrısı (self referansını içerir)
+    };
 
-    // Yaşam süresi bilgisi (İşaretçiler/referanslar için)
-    // AST düğümüne (& veya &mut UnaryOpAST) karşılık gelen yaşam süresi ID/pointer
-     std::unordered_map<const UnaryOpAST*, void*> lifetimeMap; // void* yerine uygun bir lifetime yapısı
+    // Active olan bir ödünç almayı (borrow) temsil eden yapı
+    struct ActiveBorrow {
+        const ASTNode* sourceNode;    // Bu ödünç almayı oluşturan AST düğümü (&x, &mut y ifadesi)
+        TokenLocation location; // Ödünç alma işleminin kaynak kod konumu
+        bool isMutable;         // Mutable (&mut) mı, Immutable (&) mı?
+        const Scope* borrowScope;     // Ödünç almanın geçerli olduğu kapsam (Yaşam süresinin basit bir gösterimi)
 
-    // Yardımcı analiz metodları (AST düğümlerini gezerken çağrılır)
-    void analyzeNode(ASTNode* node);
-    void analyzeStatement(StatementAST* stmt);
-    void analyzeExpression(ExpressionAST* expr);
-    void analyzeVarDecl(VarDeclAST* varDecl);
-    void analyzeAssignment(AssignmentAST* assign);
-    void analyzeCallExpression(CallExpressionAST* call);
-    void analyzeUnaryOp(UnaryOpAST* unaryOp); // '&', '&mut', '*' işlemleri için
-    void analyzeIdentifier(IdentifierAST* identifier); // Değişken kullanımları için (move/borrow)
-    // ... Diğer AST düğümleri için analiz metodları (match, loop, if vb.)
+        // Ödünç alınan değerin kaynağına işaret eden bilgi
+        // Bu SymbolInfo* bir değişkene işaret edebilir.
+        const SymbolInfo* borrowedSymbol; // Ödünç alınan değişken (eğer direkt değişken ise)
+        // Daha karmaşık durumlar (alan veya dizi elemanı ödünç alma) için ek bilgi gerekebilir.
+         const ASTNode* borrowedTargetNode; // Ödünç alınan ifadenin AST düğümü (örn: obj.field, arr[i])
 
-    // Kuralları kontrol eden metodlar
-    void checkMove(const VarDeclAST* sourceVar, TokenLocation useLoc); // Değer taşındıktan sonra kullanımı kontrol et
-    void recordBorrow(const VarDeclAST* borrowedVar, const BorrowInfo& borrow); // Bir değişkenden ödünç alma kaydı yap
-    void checkBorrowValidity(const VarDeclAST* usedVar, TokenLocation useLoc); // Ödünç alınan değerin kullanımını kontrol et
-    void endBorrowsInScope(Scope* scope); // Kapsam dışına çıkan ödünç almaların geçerliliğini sonlandır
-    void checkMutability(const VarDeclAST* var, TokenLocation useLoc, bool isWriteOperation); // Değiştirilebilirlik kontrolü
+        // Kurucu
+        ActiveBorrow(const ASTNode* src_node, TokenLocation loc, bool mut, const Scope* scope, const SymbolInfo* symbol)
+            : sourceNode(src_node), location(loc), isMutable(mut), borrowScope(scope), borrowedSymbol(symbol) {}
 
-    // Yaşam süresi analizi ve kontrolü (Karmaşık bir konudur)
-    // Referansların gösterdiği değerlerin yaşam süresi içinde kullanıldığını doğrulamak
-     void analyzeLifetimes(ASTNode* node); // AST üzerinde yaşam sürelerini çıkar veya doğrula
+        // Ödünç almanın bir diğeriyle çakışıp çakışmadığını kontrol et (Temel kural: tek mut veya çok immut)
+        bool conflictsWith(const ActiveBorrow& other) const {
+            // Mutable ödünç alma, başka herhangi bir ödünç alma ile çakışır.
+            if (isMutable || other.isMutable) return true;
+            // İki immutable ödünç alma çakışmaz.
+            return false;
+        }
 
-public:
-    OwnershipChecker(Diagnostics& diag, TypeSystem& ts);
+        // Bir ödünç almanın belirli bir kullanımla çakışıp çakışmadığını kontrol et
+        bool conflictsWithUse(UseKind useKind) const {
+            if (isMutable) return true; // Mutable ödünç alma her türlü kullanımla çakışır (kendi kullanımı hariç)
+            if (useKind == UseKind::Write || useKind == UseKind::Move || useKind == UseKind::BorrowMutable) return true; // Immutable ödünç alma, mutable kullanımla çakışır
+            return false; // Immutable ödünç alma, read veya immutable borrow ile çakışmaz
+        }
+    };
 
-    // AST'yi analiz et ve sahiplik/ödünç alma/yaşam süresi kurallarını kontrol et
-    bool check(ProgramAST* program); // true hata varsa, false yoksa
 
-    // Belirli bir değişkenin durumunu al (hata ayıklama için)
-    VariableState getVariableState(const VarDeclAST* varDecl) const;
-};
+    // Sahiplik ve Ödünç Alma Kurallarını Takip Eden ve Uygulayan Sınıf
+    class OwnershipChecker {
+    private:
+        Diagnostics& diagnostics;    // Referans
+        TypeSystem& typeSystem;      // Referans (Copy/Drop trait bilgisi için)
+        SymbolTable& symbolTable;    // Referans (Kapsam ve Sembol bilgisi için)
+
+        // Durum Takibi:
+        // Değişkenlerin anlık durumunu takip eder (Owned, Moved, Borrowed vb.)
+        // SymbolInfo* -> Anlık Durum
+        std::unordered_map<const SymbolInfo*, VariableStatus> variableStatuses;
+
+        // Aktif ödünç almaları takip eder.
+        // Key: Hangi değerin ödünç alındığı (örn: Değişkenin SymbolInfo*'ı, Struct Alanı referansı, Dizi Elemanı referansı)
+        // Value: O değere ait aktif ödünç almaların listesi (Vector<ActiveBorrow>)
+        // Basitlik için şimdilik sadece değişkenlere ait ödünç almaları takip edelim.
+        std::unordered_map<const SymbolInfo*, std::vector<ActiveBorrow>> activeVariableBorrows;
+
+        // Kapsam yığını (SymbolTable'ın kapsamlarına pointerlar) ödünç alma yaşam sürelerini yönetmek için.
+        // enterScope/exitScope ile senkronize edilir.
+        std::vector<const Scope*> scopeStack;
+
+
+        // =======================================================================
+        // Internal Helper Methods
+        // =======================================================================
+
+        // Bir tipin Copy trait'ini implemente edip etmediğini kontrol et
+        // TypeSystem'e dayanır. Temel tipler Copy'dir, Struct/Enum alanları Copy ise Copy'dir, Referanslar Copy'dir.
+        bool implementsCopy(Type* type) const;
+
+        // Bir tipin Drop implementasyonu olup olmadığını kontrol et (Resource yönetimi)
+        // TypeSystem'e dayanır.
+        bool hasDrop(Type* type) const;
+
+        // Bir sahiplik/ödünç alma hatası raporla
+        void reportOwnershipError(const TokenLocation& location, const std::string& message);
+
+        // Ödünç alma çakışmasını raporla (Çakışan ödünç alma hakkında bilgi içerir)
+        void reportBorrowConflict(const TokenLocation& newBorrowLocation, bool isNewBorrowMutable, const SymbolInfo* borrowedSymbol, const ActiveBorrow& conflictingBorrow);
+
+        // Belirli bir kapsam dışına çıkan tüm aktif ödünç almaları kaldır
+        void endBorrowsInScope(const Scope* scopeToEnd);
+
+        // Bir değişkenin mevcut durumunun belirli bir kullanım türüne izin verip vermediğini kontrol et
+        bool canUseVariable(const SymbolInfo* symbol, UseKind useKind, const TokenLocation& location) const;
+
+        // Bir ifade sonucunun (geçici değer) sahiplik/copy/drop durumunu yönet.
+        void handleExpressionResult(ExpressionAST* expr);
+
+
+    public:
+        // Kurucu
+        OwnershipChecker(Diagnostics& diag, TypeSystem& ts, SymbolTable& st);
+
+        // =======================================================================
+        // Semantic Analyzer tarafından AST Traversal Sırasında Çağrılan Metodlar
+        // SEMA, AST düğümlerini analiz ederken bu metodları uygun yerlerde çağırır.
+        // =======================================================================
+
+        // Yeni bir kapsam açılırken çağrılır
+        void enterScope(const Scope* scope);
+
+        // Mevcut kapsam kapanırken çağrılır (Kaynakların drop edildiği yer)
+        void exitScope();
+
+        // Bir değişken bildirimi analiz edilirken çağrılır (let x = ...;)
+        void recordVariableDeclaration(const SymbolInfo* symbol, const TokenLocation& location);
+
+        // Bir değişkenin kullanımı analiz edilirken çağrılır (x + 1, x = 5, func(x))
+        // Kullanımın türü (okuma, yazma, taşıma vb.) belirtilir.
+        void handleVariableUse(const SymbolInfo* symbol, UseKind useKind, const TokenLocation& location, const ASTNode* useNode);
+
+        // Atama ifadesi analiz edilirken çağrılır (sol = sag)
+        void handleAssignment(const ExpressionAST* leftExpr, const ExpressionAST* rightExpr, const TokenLocation& location);
+
+        // Fonksiyon çağrısı analiz edilirken çağrılır (Argümanlar ve dönüş değeri)
+        void handleFunctionCall(const CallExpressionAST* callExpr);
+
+        // Referans oluşturma (&expr veya &mut expr) analiz edilirken çağrılır
+        void handleReferenceCreation(const UnaryOpAST* unaryOp, const SymbolInfo* borrowedSymbol); // borrowedSymbol, ödünç alınan değişkenin sembolü olabilir.
+
+        // Dereference (*expr) analiz edilirken çağrılır
+        void handleDereference(const UnaryOpAST* unaryOp);
+
+        // Return deyimi analiz edilirken çağrılır
+        void handleReturn(const ReturnStatementAST* returnStmt);
+
+        // Break veya Continue deyimi analiz edilirken çağrılır
+        void handleJump(const StatementAST* jumpStmt); // BreakStatementAST veya ContinueStatementAST
+
+        // Match kollarının veya If/Else dallarının birleştiği yerde çağrılabilir
+        // Durumun birleştirilmesi gereken karmaşık bir analiz gerektirir.
+        void handleBranchMerge(const TokenLocation& mergeLocation);
+    };
+
+} // namespace cnt_compiler
 
 #endif // CNT_COMPILER_OWNERSHIP_CHECKER_H
