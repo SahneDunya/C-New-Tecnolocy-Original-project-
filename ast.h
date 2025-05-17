@@ -1,40 +1,34 @@
 #ifndef CNT_COMPILER_AST_H
 #define CNT_COMPILER_AST_H
 
-#include "token.h" // Token konum bilgisi için
+#include "token.h" // Token konum bilgisi (TokenLocation) için
 
 #include <vector>
 #include <memory> // std::unique_ptr için
 #include <string>
 
-// Token'ın konum bilgisini temsil eden yapı (Token'dan veya ayrı bir yapıdan alabiliriz)
-// Eğer Token yapınız zaten location içeriyorsa bunu kullanabilirsiniz,
-// veya daha esnek bir yapı için ayrı bir struct tanımlayabilirsiniz:
-struct TokenLocation {
-    std::string filename;
-    int line;
-    int column;
-    // Varsayılan kurucu
-    TokenLocation() : filename(""), line(0), column(0) {}
-    // Token'dan kurucu
-    TokenLocation(const Token& t) : filename(t.filename), line(t.line), column(t.column) {}
-    TokenLocation(std::string fn, int l, int c) : filename(std::move(fn)), line(l), column(c) {}
-};
+// Semantic sistemden ileri bildirimler
+struct Type; // semantic Type*
+struct SymbolInfo; // semantic SymbolInfo*
 
+// Token'ın konum bilgisini temsil eden yapı (Token'dan kopyalanır)
+// Eğer Token yapınız zaten location içeriyorsa bunu kullanabilirsiniz.
+// TokenLocation yapısı daha önceki adımda ast.h'a eklendi.
+ struct TokenLocation { ... };
 
 // AST düğümlerinin temel sınıfı
-// Her AST düğümü, kaynak kodundaki konumunu tutabilir (hata raporlama için)
 struct ASTNode {
     TokenLocation location; // Kaynak kodundaki başlangıç konumu
 
-    // Sanal yıkıcı (virtual destructor) polymorphic delete için gereklidir
+    // (Opsiyonel ama yaygın) İfade ve Tip düğümlerine semantik tip bilgisini eklemek
+    // SEMA bu alanı doldurur.
+    // Type* resolvedSemanticType = nullptr; // Semantic analiz sonrası çözülmüş tip bilgisi
+
+    // Sanal yıkıcı (polymorphic delete için)
     virtual ~ASTNode() = default;
 
     // Hata ayıklama için düğüm türünü döndüren sanal metod
-    virtual std::string getNodeType() const = 0; // Saf sanal fonksiyon
-
-    // (İsteğe bağlı) Bir Visitor pattern uygulamayı düşünüyorsanız sanal accept metodu
-     virtual void accept(ASTVisitor& visitor) = 0;
+    virtual std::string getNodeType() const = 0;
 };
 
 // Programın tamamını temsil eden kök düğüm
@@ -46,26 +40,33 @@ struct ProgramAST : public ASTNode {
 
     std::string getNodeType() const override { return "ProgramAST"; }
 
-    // Çocuk düğümleri eklemek için yardımcı metod (isteğe bağlı)
-    void addDeclaration(std::unique_ptr<DeclarationAST> decl); // Implementasyonu .cpp dosyasında
+    // Çocuk düğümleri eklemek için yardımcı metod
+    void addDeclaration(std::unique_ptr<DeclarationAST> decl); // Implementasyonu .cpp dosyasında veya inline
 };
 
 // Diğer temel AST düğüm kategorileri
-// Bunlar sadece arayüzlerdir, somut sınıflar diğer başlıklarda olacak.
 struct StatementAST : public ASTNode {
     virtual std::string getNodeType() const override { return "StatementAST"; }
 };
 
 struct ExpressionAST : public ASTNode {
+    // ExpressionAST'ten miras alan tüm düğümler için çözülmüş semantik tipi tutar
+    Type* resolvedSemanticType = nullptr; // Semantic analiz sonrası çözülmüş tip bilgisi
+
     virtual std::string getNodeType() const override { return "ExpressionAST"; }
 };
 
 struct DeclarationAST : public ASTNode {
+    // isPublic bayrağı alt sınıflara eklenecek
      virtual std::string getNodeType() const override { return "DeclarationAST"; }
 };
 
 struct TypeAST : public ASTNode {
-     virtual std::string getNodeType() const override { return "TypeAST"; }
+    // TypeAST'ten miras alan tüm düğümler için çözülmüş semantik tipi tutar
+    // Parser sadece sözdizimsel tip ağacını kurar, SEMA bunu çözümlenmiş Type* objesine bağlar.
+    Type* resolvedSemanticType = nullptr; // Semantic analiz sonrası çözülmüş semantik tip objesi
+
+    virtual std::string getNodeType() const override { return "TypeAST"; }
 };
 
 
