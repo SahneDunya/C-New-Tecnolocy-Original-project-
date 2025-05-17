@@ -2,50 +2,42 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <memory> // For std::unique_ptr
+#include <memory>
+#include <filesystem> // C++17 için dosya sistemi işlemleri
 
 // LLVM temel başlıkları
-#include "llvm/ADT/Optional.h" // Modern LLVM'de Optional kullanımı
-#include "llvm/IR/IRBuilder.h" // LLVM IR oluşturmak için
-#include "llvm/IR/LLVMContext.h" // LLVM bağlamı
-#include "llvm/IR/Module.h"     // LLVM Modülü (tüm kodun ana kabı)
-#include "llvm/IR/Verifier.h"   // LLVM IR'yi doğrulamak için
-#include "llvm/Passes/PassBuilder.h" // Modern optimizasyon geçişleri için
-#include "llvm/Passes/OptimizationLevel.h" // Optimizasyon seviyeleri için enum
-
-// LLVM Hedef (Target) başlıkları
-#include "llvm/Support/TargetSelect.h" // Hedefleri başlatmak için
-#include "llvm/Support/TargetRegistry.h" // Hedef bulmak için
-#include "llvm/Target/TargetMachine.h" // Hedef makine (mimariye özgü ayarlar)
-#include "llvm/MC/TargetRegistry.h" // Modern TargetRegistry için
-
-// LLVM Dosya/Girdi/Çıktı başlıkları
-#include "llvm/Support/FileSystem.h" // Dosya işlemleri için
-#include "llvm/Support/Host.h"       // Host bilgilerini almak için
-#include "llvm/Support/raw_ostream.h" // LLVM'in çıktı akışları için
-
-// Komut satırı argümanları başlığı (LLVM'in kendi kütüphanesini kullanabiliriz)
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/IR/LegacyPassManager.h" // Veya llvm/Passes/PassBuilder.h
 
-// Linker başlığı (Genellikle lld harici bir araç olarak çağrılır, doğrudan C++ API nadiren kullanılır)
- #include "llvm/Linker/Linker.h" // Doğrudan lld C++ API kullanımı karmaşıktır
-
-// Sistem hata başlığı
-#include <system_error>
-
-// Kendi derleyici bileşenlerinizin başlıkları (Placeholder - Sizin tarafınızdan oluşturulacaklar)
-#include "lexer.h"
-#include "parser.h"
-#include "sema.h" // Semantic Analyzer (Anlamsal Analizci)
-#include "codegen.h" // LLVM IR Code Generator (Kod Üretici)
-#include "module_manager.h" // Modül ve Import yönetimi
-#include "diagnostics.h" // Hata ve uyarı raporlama sistemi
- #include "ast.h" // AST düğüm tanımları (eğer ayrı dosyalardaysa)
+// Kendi derleyici bileşenlerinizin başlıkları
+#include "diagnostics.h"           // Hata raporlama
+#include "token.h"                 // Token ve TokenLocation
+#include "lexer.h"                 // Lexer
+#include "parser.h"                // Parser
+#include "ast.h"                   // AST temel
+#include "expressions.h"           // AST ifadeler
+#include "statements.h"            // AST deyimler
+#include "declarations.h"          // AST bildirimler
+#include "types.h"                 // AST tipler
+#include "symbol_table.h"          // Sembol Tablosu
+#include "type_system.h"           // Tip Sistemi
+#include "ownership_checker.h"     // Sahiplik/Ödünç Alma Kontrolcüsü
+#include "module_interface.h"      // Modül Arayüz Yapısı
+#include "module_manager.h"        // Modül Çözümleyici
+#include "interface_extractor.h"   // Arayüz Çıkarıcı
+#include "utils.h"                 // Genel yardımcılar (örn: cnt_compiler::splitString)
 
 
 // ==============================================================================
 // Komut Satırı Argümanlarının Tanımlanması (LLVM'in CommandLine kütüphanesi ile)
-// Daha karmaşık argüman yönetimi için başka kütüphaneler (plusa, boost::program_options) kullanılabilir.
 // ==============================================================================
 
 // Giriş dosyası (.cnt)
@@ -54,11 +46,16 @@ llvm::cl::opt<std::string> InputFilename(llvm::cl::Positional,
                                           llvm::cl::Required,
                                           llvm::cl::value_desc("filename"));
 
-// Çıktı dosyası
-llvm::cl::opt<std::string> OutputFilename("o",
-                                           llvm::cl::desc("Output file name"),
-                                           llvm::cl::value_desc("filename"),
-                                           llvm::cl::init("a.out")); // Varsayılan çıktı adı
+// Çıktı Object (.o) dosyası adı
+llvm::cl::opt<std::string> OutputObjectFilename("o",
+                                               llvm::cl::desc("Output object file name"),
+                                               llvm::cl::value_desc("filename"));
+
+// Çıktı Interface (.hnt) dosyası adı veya dizini
+// Kullanıcı tam adı belirtebilir (-hnt mylib.hnt) veya sadece dizini belirtebilir (-hntdir include/)
+llvm::cl::opt<std::string> OutputInterfaceLocation("hnt",
+                                                   llvm::cl::desc("Output interface (.hnt) file name or directory"),
+                                                   llvm::cl::value_desc("path"));
 
 // Optimizasyon seviyesi
 llvm::cl::opt<std::string> OptLevel("O",
@@ -66,15 +63,13 @@ llvm::cl::opt<std::string> OptLevel("O",
                                     llvm::cl::value_desc("level"),
                                     llvm::cl::init("0")); // Varsayılan -O0
 
-// Hedef mimari (İlk aşamada RISC-V'ye sabit, ancak komut satırı seçeneği olarak eklenebilir)
- llvm::cl::opt<std::string> TargetTriple("target",
-                                          llvm::cl::desc("Target triple (e.g., riscv64-unknown-elf)"),
-                                          llvm::cl::value_desc("triple"),
-                                          llvm::cl::init(llvm::sys::getDefaultTargetTriple())); // Varsayılan sistem mimarisi
+// İmport arama yolları
+llvm::cl::list<std::string> ImportSearchPaths("I",
+                                             llvm::cl::desc("Add directory to import search path"),
+                                             llvm::cl::value_desc("directory"));
 
-// Çeşitli çıktı formatları (İsteğe bağlı olarak IR, Assembly çıktısı vb.)
- llvm::cl::opt<bool> EmitLLVMIR("emit-llvm", llvm::cl::desc("Emit LLVM IR"), llvm::cl::init(false));
- llvm::cl::opt<bool> EmitAssembly("emit-asm", llvm::cl::desc("Emit Assembly"), llvm::cl::init(false));
+// Hedef mimari (Sabit veya Komut Satırı Seçeneği)
+ llvm::cl::opt<std::string> TargetTriple("target", ...);
 
 
 // ==============================================================================
@@ -83,7 +78,6 @@ llvm::cl::opt<std::string> OptLevel("O",
 
 int main(int argc, char** argv) {
     // 1. LLVM Altyapısını Başlatma
-    // Gerekli tüm LLVM bileşenlerini başlatın. Bu genellikle derleyicinin başında bir kez yapılır.
     llvm::InitializeAllTargetInfos();
     llvm::InitializeAllTargets();
     llvm::InitializeAllTargetMCs();
@@ -91,225 +85,197 @@ int main(int argc, char** argv) {
     llvm::InitializeAllAsmPrinters();
 
     // 2. Komut Satırı Argümanlarını Ayrıştırma
-    llvm::cl::ParseCommandLineOptions(argc, argv, "CNT Compiler: A new programming language compiler built with LLVM\n");
+    llvm::cl::ParseCommandLineOptions(argc, argv, "CNT Compiler\n");
 
-    // 3. Optimizasyon Seviyesini Belirleme
+    // 3. Gerekli Derleyici Bileşenlerini Oluşturma
+    Diagnostics diagnostics;
+    TypeSystem typeSystem;
+    SymbolTable symbolTable; // Ana sembol tablosu
+    OwnershipChecker ownershipChecker(diagnostics, typeSystem); // OwnershipChecker'ın ihtiyaç duyduğu bağımlılıkları verin
+    ModuleResolver moduleResolver(diagnostics, typeSystem /*, symbolTable*/); // ModuleResolver'ın ihtiyaç duyduğu bağımlılıkları verin
+    InterfaceExtractor interfaceExtractor(diagnostics, typeSystem); // InterfaceExtractor'ın ihtiyaç duyduğu bağımlılıkları verin
+
+
+    // 4. Optimizasyon Seviyesini Belirleme
     llvm::OptimizationLevel optimizationLevel;
-    if (OptLevel == "0") {
-        optimizationLevel = llvm::OptimizationLevel::O0;
-    } else if (OptLevel == "2") {
-        optimizationLevel = llvm::OptimizationLevel::O2;
-    } else if (OptLevel == "s") {
-        optimizationLevel = llvm::OptimizationLevel::Os;
-    } else if (OptLevel == "x") { // -Ox ve -O3 için agresif optimizasyon seviyesi
-        optimizationLevel = llvm::OptimizationLevel::O3;
-    } else if (OptLevel == "3") {
-        optimizationLevel = llvm::OptimizationLevel::O3;
-    } else if (OptLevel == "fast") { // -Ofast için agresif optimizasyon seviyesi (floating point semantics değişebilir)
-        optimizationLevel = llvm::OptimizationLevel::Ofast;
-    } else {
-        // diagnostics.h dosyasındaki ReportError fonksiyonunu kullanarak hata bildirin
-        ReportError("Hata: Desteklenmeyen optimizasyon seviyesi '" + OptLevel + "'. Desteklenenler: 0, 2, s, x, 3, fast.");
-        return 1; // Hata kodu ile çıkış yap
+    if (OptLevel == "0") optimizationLevel = llvm::OptimizationLevel::O0;
+    else if (OptLevel == "2") optimizationLevel = llvm::OptimizationLevel::O2;
+    else if (OptLevel == "s") optimizationLevel = llvm::OptimizationLevel::Os;
+    else if (OptLevel == "x" || OptLevel == "3") optimizationLevel = llvm::OptimizationLevel::O3; // Ox ve O3'ü O3'e haritalayalım
+    else if (OptLevel == "fast") optimizationLevel = llvm::OptimizationLevel::Ofast; // Ofast
+    else {
+        diagnostics.reportError("Geçersiz optimizasyon seviyesi: " + OptLevel + ". Desteklenenler: 0, 2, s, x, 3, fast.");
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // 4. Hedef Mimariyi Yapılandırma (İlk aşamada RISC-V)
-    // Gerçek bir derleyici hedef üçlüsünü (target triple) genellikle komut satırından alır veya sistemden belirler.
-    // RISC-V için yaygın üçlüler: "riscv64-unknown-elf", "riscv32-unknown-elf"
-    std::string targetTriple = "riscv64-unknown-elf"; // Veya komut satırından gelen değeri kullanın
-
+    // 5. Hedef Mimariyi Yapılandırma (İlk aşamada RISC-V)
+    std::string targetTriple = "riscv64-unknown-elf"; // Veya komut satırından al
     std::string Error;
-    // TargetRegistry'den hedefi bulun
     auto Target = llvm::TargetRegistry::lookupTarget(targetTriple, Error);
     if (!Target) {
-        ReportError("Hata: Hedef mimari bulunamadı: " + Error);
-        return 1;
+        diagnostics.reportError("Hedef mimari bulunamadı: " + Error);
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // Hedef makineyi oluşturun (mimariye özgü detayları içerir)
     llvm::TargetOptions opt;
-    // opt nesnesini TargetMachineOptions (llvm/Target/TargetOptions.h) ile yapılandırabilirsiniz
-    // opt.FloatABIType = llvm::FloatABI::Hard; // Örnek: Hard-float ABI kullan
-
-    auto TargetMachine = Target->createTargetMachine(
-        targetTriple,          // Hedef üçlüsü
-        "generic",             // CPU türü (belirli bir CPU varyantı "rocket", "sifive-e76" vb. olabilir)
-        "",                    // CPU özellikleri (özelleştirmeler "+m,+a,+f,+d" gibi)
-        opt,                   // Hedef seçenekleri
-        llvm::Reloc::PIC_,     // Relocation modeli (Position Independent Code)
-        llvm::CodeModel::Default, // Kod modeli
-        optimizationLevel      // Optimizasyon seviyesini burada TargetMachine'e geçirin
-    );
-
+    auto TargetMachine = std::unique_ptr<llvm::TargetMachine>(
+        Target->createTargetMachine(targetTriple, "generic", "", opt,
+                                    llvm::Reloc::PIC_, llvm::CodeModel::Default,
+                                    optimizationLevel));
     if (!TargetMachine) {
-        ReportError("Hata: Hedef makine oluşturulamadı.");
-        return 1;
+        diagnostics.reportError("Hedef makine oluşturulamadı.");
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // 5. Giriş Kaynak Kodunu Oku
+    // 6. Giriş Kaynak Kodunu Oku
     std::ifstream sourceFile(InputFilename);
     if (!sourceFile.is_open()) {
-        ReportError("Hata: Giriş dosyası açılamadı: " + InputFilename);
-        return 1;
+        diagnostics.reportError("Giriş dosyası açılamadı: " + InputFilename);
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
     std::string sourceCode((std::istreambuf_iterator<char>(sourceFile)),
                            (std::istreambuf_iterator<char>()));
     sourceFile.close();
 
-    // 6. Derleyici Ön Uç Aşamaları (Frontend): Lexing, Parsing, Semantic Analysis, LLVM IR Generation
-    // Bu kısım sizin dilinizin yapısına özel kodunuzu içerecektir.
-    // Placeholders:
+    // Giriş dosyasının yolunu al (InterfaceExtractor için gerekli olabilir)
+     std::filesystem::path sourceFilePath = InputFilename;
+     std::filesystem::path currentDirectory = std::filesystem::current_path(); // Mevcut çalışma dizini
 
-    Lexer lexer(sourceCode);
-    Parser parser(lexer);
-    auto ast = parser.parse(); // Kaynak kodu ayrıştır ve AST'yi oluştur
 
-    if (!ast) {
-        // Ayrıştırma hatası oluştuysa, hata zaten parser veya diagnostics tarafından bildirilmiş olmalı
-        ReportError("Hata: Sözdizimsel ayrıştırma başarısız."); // Daha spesifik hata parser'dan gelmeli
-        return 1;
+    // 7. İmport Arama Yollarını Ayarla
+    moduleResolver.setImportSearchPaths(ImportSearchPaths);
+    // Varsayılan arama yollarını da ekleyebilirsiniz (örn: derleyici kurulu olduğu yer, mevcut dizin)
+     moduleResolver.addImportSearchPath(currentDirectory.string());
+
+
+    // 8. Frontend Aşamaları: Lexing, Parsing, Semantic Analysis
+    Lexer lexer(sourceCode, InputFilename);
+    Parser parser(lexer, diagnostics); // Parser diagnostics'i kullanır
+    auto programAST = parser.parse();
+
+    // Parsing hatası varsa durdur
+    if (diagnostics.hasErrors()) {
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    SemanticAnalyzer sema;
-    // Anlamsal analiz yap: Tip kontrolü, kapsam, sahiplik/ödünç alma kuralları, arayüz çözümlemesi
-    bool semanticErrors = sema.analyze(ast);
+    // Semantik Analiz
+    SemanticAnalyzer sema(diagnostics, typeSystem, symbolTable, ownershipChecker, moduleResolver);
+    bool semanticErrorsFound = sema.analyze(programAST.get()); // AST'nin pointer'ını geçin
 
-    if (semanticErrors) {
-        ReportError("Hata: Anlamsal analiz sırasında hatalar bulundu.");
-        return 1;
+    // Semantik hata varsa durdur
+    if (semanticErrorsFound) {
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // LLVM Bağlamı ve Modülü Oluşturma
-    // LLVMContext tüm LLVM veri yapıları için ana konteynerdir. Çoğu uygulama için bir tane yeterlidir.
-    llvm::LLVMContext TheContext;
-    // LLVM Modülü, tüm fonksiyonları ve global değişkenleri içerir. Bir kaynak dosyaya karşılık gelir.
-    auto TheModule = std::make_unique<llvm::Module>(InputFilename, TheContext);
+    // 9. Arayüz Çıkarımı ve Kaydetme (.hnt dosyası oluşturma)
+    // Semantik analiz başarılıysa arayüzü çıkar ve kaydet
+    std::string moduleName = cnt_compiler::getFileNameWithoutExtension(sourceFilePath); // Modül adını dosya adından alalım
 
-    // Modülün hedef üçlüsünü ve veri düzenini ayarla
-    TheModule->setTargetTriple(TargetMachine->getTargetTriple().str());
-    TheModule->setDataLayout(TargetMachine->createDataLayout());
-
-    // Kod Üreticiyi (Code Generator) başlat ve LLVM IR üret
-    LLVMCodeGenerator codegen(*TheModule, TheContext, *TargetMachine); // CodeGen'in ihtiyaç duyduğu argümanları geçirin
-    bool codegenErrors = codegen.generate(ast); // AST'den LLVM IR'yi üret
-
-    if (codegenErrors) {
-        ReportError("Hata: Kod üretimi sırasında hatalar bulundu.");
-        return 1;
-    }
-
-    // İsteğe bağlı: Üretilen LLVM IR'yi doğrula (hataları yakalamak için iyi bir adım)
-    if (llvm::verifyModule(*TheModule, &llvm::errs())) {
-        ReportError("Hata: Üretilen LLVM IR geçersiz. Derleme durduruldu.");
-        // Geçersiz modülü görmek isterseniz: TheModule->print(llvm::errs(), nullptr);
-        return 1;
-    }
-
-    // İsteğe bağlı: Üretilen LLVM IR'yi bir dosyaya yaz (Hata ayıklama için)
-     if (EmitLLVMIR) {
-         std::error_code EC;
-         llvm::raw_file_ostream dest("output.ll", EC, llvm::sys::fs::OF_None);
-         if (EC) {
-             ReportError("Hata: LLVM IR dosyası yazılamadı: " + EC.message());
-             return 1;
-         }
-         TheModule->print(dest, nullptr);
-     }
-
-
-    // 7. LLVM Optimizasyon Geçişlerini Çalıştırma
-    // Modern LLVM'de PassBuilder kullanılır.
-    llvm::LoopAnalysisManager LAM;
-    llvm::FunctionAnalysisManager FAM;
-    llvm::CGSCCAnalysisManager CGAM;
-    llvm::ModuleAnalysisManager MAM;
-
-    llvm::PassBuilder PB(TargetMachine); // PassBuilder hedef makineyi bilir ve buna göre geçişleri ayarlar
-
-    // Gerekli analizleri kaydet
-    PB.registerModuleAnalyses(MAM);
-    PB.registerCGSCCAnalyses(CGAM);
-    PB.registerFunctionAnalyses(FAM);
-    PB.registerLoopAnalyses(LAM);
-    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-    // Optimizasyon geçişlerini PassManager'a ekle
-    llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(optimizationLevel);
-
-    // Optimizasyonları çalıştır
-    MPM.run(*TheModule, MAM);
-
-
-    // 8. Makine Kodunu Üretme (Object Dosyası veya Assembly)
-    // Çıktı dosyası uzantısına göre Assembly mi yoksa Object file mı üretileceğine karar verilebilir.
-    llvm::CodeGenFileType FileType = llvm::CodeGenFileType::ObjectFile; // Varsayılan olarak Object File üret
-
-    if (OutputFilename.empty()) {
-         // Çıktı adı belirtilmediyse, giriş dosyasından '.cnt' uzantısını kaldırıp '.o' ekle
-        size_t lastDot = InputFilename.rfind('.');
-        if (lastDot == std::string::npos) {
-            OutputFilename = InputFilename + ".o";
+    // Çıktı .hnt dosyasının yolunu belirle
+    std::filesystem::path outputInterfacePath;
+    if (!OutputInterfaceLocation.empty()) {
+        std::filesystem::path hntOutputBase = OutputInterfaceLocation;
+        if (hntOutputBase.has_extension()) {
+            // Eğer uzantı belirtilmişse, kullanıcının tam dosya adı istediğini varsayalım
+            outputInterfacePath = hntOutputBase;
         } else {
-            OutputFilename = InputFilename.substr(0, lastDot) + ".o";
+            // Uzantı belirtilmemişse, bir dizin olduğunu varsayalım ve dosya adını oluşturalım
+             outputInterfacePath = hntOutputBase / (moduleName + interfaceExtractor.interfaceFileExtension);
         }
+    } else {
+        // .hnt çıktı yolu belirtilmemişse, varsayılan olarak mevcut dizin + modül adı.hnt kullan
+        outputInterfacePath = currentDirectory / (moduleName + interfaceExtractor.interfaceFileExtension);
+        // Veya object dosyasının dizinini kullanabilirsiniz:
+         if (!OutputObjectFilename.empty()) {
+             outputInterfacePath = std::filesystem::path(OutputObjectFilename).parent_path() / (moduleName + interfaceExtractor.interfaceFileExtension);
+         } else {
+             outputInterfacePath = currentDirectory / (moduleName + interfaceExtractor.interfaceFileExtension);
+         }
     }
 
-    // İsteğe bağlı olarak, çıktı uzantısına göre FileType'ı belirle
-     if (OutputFilename.size() > 2 && OutputFilename.substr(OutputFilename.size() - 2) == ".s") {
-         FileType = llvm::CodeGenFileType::AssemblyFile;
-     }
+    // Arayüzü çıkar
+    std::shared_ptr<ModuleInterface> moduleInterface = interfaceExtractor.extract(programAST.get(), moduleName, sourceFilePath);
+
+    if (moduleInterface) {
+        // Arayüzü dosyaya kaydet
+        if (!interfaceExtractor.save(*moduleInterface, outputInterfacePath)) {
+             // Kaydetme hatası zaten diagnostics tarafından raporlandı.
+        } else {
+             diagnostics.reportInfo("Modül arayüzü başarıyla kaydedildi: " + outputInterfacePath.string());
+        }
+    } else {
+         // Arayüz çıkarımında hata oluştu (SEMA hatası yoksa bu bir internal extractor hatasıdır)
+         diagnostics.reportInternalError("Modül arayüzü çıkarılamadı.");
+    }
+
+
+    // Eğer anlamsal hatalar veya arayüz çıkarma/kaydetme hataları varsa, kod üretimine geçme
+    if (diagnostics.hasErrors()) {
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
+    }
+
+
+    // 10. Kod Üretimi (LLVM IR ve Object File)
+    llvm::LLVMContext llvmContext;
+    LLVMCodeGenerator codeGen(diagnostics, typeSystem, symbolTable, llvmContext, *TargetMachine);
+    std::unique_ptr<llvm::Module> llvmModule = codeGen.generate(programAST.get());
+
+    // Kod üretimi hatalarını kontrol et (Code generator genellikle SEMA sonrası hata üretmemeli, ama yine de kontrol iyi olur)
+     if (!llvmModule || diagnostics.hasErrors()) {
+        diagnostics.reportInternalError("LLVM kod üretimi sırasında hata.");
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
+    }
+
+    // 11. Object Dosyası Oluşturma
+    // Çıktı object dosya adını belirle
+    std::filesystem::path outputObjectPath;
+    if (!OutputObjectFilename.empty()) {
+        outputObjectPath = OutputObjectFilename;
+    } else {
+         // Belirtilmemişse, varsayılan olarak mevcut dizin + modül adı.o kullan
+         outputObjectPath = currentDirectory / (moduleName + ".o");
+    }
 
 
     std::error_code EC;
-    // Çıktı dosyasını aç (ikili çıktı için OF_None)
-    llvm::raw_fd_ostream dest(OutputFilename, EC, llvm::sys::fs::OF_None);
+    // Object dosyasını aç
+    llvm::raw_fd_ostream dest(outputObjectPath.string(), EC, llvm::sys::fs::OF_None); // OF_None for binary output
     if (EC) {
-        ReportError("Hata: Çıktı dosyası '" + OutputFilename + "' açılamadı: " + EC.message());
-        return 1;
+        diagnostics.reportError("Çıktı dosyası '" + outputObjectPath.string() + "' açılamadı: " + EC.message());
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // Hedef makinenin pass manager'ına kod üretimi için gerekli geçişleri ekle
-    llvm::legacy::PassManager codeGenPM; // Eski PassManager hala kod üretimi için yaygın
-    if (TargetMachine->addPassesToEmitFile(codeGenPM, dest, nullptr, FileType)) {
-        ReportError("Hata: Hedef makine istenen dosya türünü üretemiyor.");
-        return 1;
+    // LLVM PassManager'ı kullanarak object file'ı yaz
+    llvm::legacy::PassManager PM;
+    // TargetMachine'e object file üretimi için gerekli geçişleri ekle
+    if (TargetMachine->addPassesToEmitFile(PM, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+        diagnostics.reportError("Hedef makine object file üretemiyor.");
+        diagnostics.printAll();
+        return diagnostics.hasErrors() ? 1 : 0;
     }
 
-    // Kod üretimi geçişlerini çalıştır
-    codeGenPM.run(*TheModule);
-    dest.flush(); // Tamponu boşalt ve dosyaya yaz
+    PM.run(*llvmModule); // Geçişleri çalıştır (kod üretimi dahil)
+    dest.flush(); // Tamponu boşalt
+
+    // 12. Linkleme (Placeholder)
+    // Object dosyalarını çalıştırılabilir dosyaya linkleme aşaması.
+    // Genellikle lld gibi harici bir linker çağrılarak yapılır.
+    // Bu kısım şimdilik atlanmıştır.
+     diagnostics.reportInfo("Object file oluşturuldu: " + outputObjectPath.string());
+     diagnostics.reportInfo("Linkleme aşaması atlandı.");
 
 
-    // 9. Linkleme (Genellikle harici lld aracılığıyla)
-    // LLVM'in C++ API'si ile doğrudan linkleme karmaşık olabilir.
-    // Genellikle bu aşamada, derleyici sürücüsü (sizin main.cpp'niz),
-    // üretilen object (.o) dosyalarını ve gerekli kütüphaneleri alarak
-    // lld (LLVM Linker) gibi harici bir linker programını çalıştırır.
-    // Bu örnek, sadece object dosyası üretme aşamasında durmaktadır.
-    // Çalıştırılabilir dosya elde etmek için lld'yi çağırmanız gerekir.
+    // 13. Sonuçları Yazdır ve Hata Durumunu Dön
+    diagnostics.printAll();
 
-    // Örnek (basit ve güvenli olmayan) lld çağırma konsepti:
-     std::string executableFilename = "a.out"; // Veya ayrı bir komut satırı argümanından al
-     std::string linkerCommand = "lld " + OutputFilename + " -o " + executableFilename;
-     int linkerResult = system(linkerCommand.c_str()); // system() kullanmak genellikle kaçınılmalıdır
-     if (linkerResult != 0) {
-         ReportError("Hata: Linkleme başarısız.");
-         return 1;
-     }
-
-
-    // 10. Başarılı Tamamlama Mesajı
-    ReportInfo("Derleme başarıyla tamamlandı: " + InputFilename + " -> " + OutputFilename);
-
-    return 0; // Başarılı çıkış kodu
+    return diagnostics.hasErrors() ? 1 : 0; // Hata varsa 1, yoksa 0 döndür
 }
-
-// Diagnostics fonksiyonlarının temel implementasyonu (diagnostics.h'ta tanımlanmalı)
-// extern keyword'ünü kaldırın veya diagnostics.h'ta tanımlayıp burada implemente edin.
- void ReportError(const std::string& message) {
-     std::cerr << "HATA: " << message << std::endl;
- }
-//
- void ReportInfo(const std::string& message) {
-     std::cout << "Bilgi: " << message << std::endl;
- }
